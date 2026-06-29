@@ -367,7 +367,7 @@ function PortfolioRiskKpis({ portfolio }: { portfolio: PortfolioAnalysisResponse
 function MetricFromContract({ label, metric }: { label: string; metric: StandardMetric }) {
   const value = metric.unit === "percent"
     ? `${formatNumber(metric.value)}%`
-    : metric.unit && ["USD", "HKD", "CNY", "RMB"].includes(metric.unit)
+    : metric.unit && ["USD", "HKD", "CNY", "RMB", "KRW"].includes(metric.unit)
       ? formatCurrency(metric.value, metric.unit)
       : metric.value === null
         ? "-"

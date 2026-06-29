@@ -4,7 +4,9 @@ from datetime import timedelta
 from fastapi import APIRouter
 
 from app.api.currency_conversion import convert_money
+from app.api.currency_conversion import convert_position_money_values
 from app.api.currency_conversion import normalize_currency_code
+from app.api.currency_conversion import resolve_position_display_fx
 from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
 from app.api.time_normalization import normalize_date_to_iso
 from app.repositories.raw_repository import RawRepository
@@ -70,7 +72,7 @@ def list_positions(symbol: str | None = None, page: int = 1, page_size: int = 20
     items = all_items[offset : offset + normalized_page_size]
     currency_context = _resolve_currency_context(all_items)
     display_currency = currency_context["display_currency"]
-    enriched = _enrich_positions(items, fx_rate=currency_context["rate"])
+    enriched = _enrich_positions(items, display_currency=display_currency)
     effective_realtime = any(bool(item.get("is_realtime")) for item in enriched)
     return {
         "filters": {"symbol": symbol, "page": normalized_page, "page_size": normalized_page_size},
@@ -103,7 +105,7 @@ def get_industry_allocation() -> dict:
     items = _list_current_positions()
     currency_context = _resolve_currency_context(items)
     display_currency = currency_context["display_currency"]
-    enriched = _enrich_positions(items, fx_rate=currency_context["rate"])
+    enriched = _enrich_positions(items, display_currency=display_currency)
     effective_realtime = any(bool(item.get("is_realtime")) for item in enriched)
     grouped: dict[str, float] = {}
     for pos in enriched:
@@ -149,7 +151,11 @@ def get_position_detail(symbol: str) -> dict:
     position_items = _list_current_positions(symbol=normalized_symbol)
     currency_context = _resolve_currency_context(position_items)
     display_currency = currency_context["display_currency"]
-    position = _enrich_positions(position_items, fx_rate=currency_context["rate"])
+    position = _enrich_positions(position_items, display_currency=display_currency)
+    price_currency = normalize_currency_code(
+        position_items[0].get("currency") if position_items else None,
+        display_currency,
+    )
     trades = _list_symbol_trades(normalized_symbol, fx_rate=currency_context["rate"])
     price_history = _list_symbol_price_history(normalized_symbol, fx_rate=currency_context["rate"])
     price_history = _merge_price_history(
@@ -166,6 +172,7 @@ def get_position_detail(symbol: str) -> dict:
         "symbol": normalized_symbol,
         "account_base_currency": currency_context["account_base_currency"],
         "display_currency": display_currency,
+        "price_currency": price_currency,
         "currency_conversion": currency_context["currency_conversion"],
         "position": position[0] if position else None,
         "trades": trades,
@@ -315,6 +322,8 @@ def _select_current_position_rows(rows: list[dict]) -> list[dict]:
                 "report_date": row.get("report_date"),
                 "asset_category": row.get("asset_category"),
                 "symbol": symbol,
+                "currency": row.get("currency"),
+                "fx_rate_to_base": row.get("fx_rate_to_base", row.get("fxRateToBase")),
                 "level_of_detail": "SUMMARY_AGGREGATED",
                 "quantity": 0.0,
                 "market_value_snapshot": 0.0,
@@ -751,7 +760,7 @@ def _iso_to_date(value: str | None) -> date | None:
         return None
 
 
-def _enrich_positions(items: list[dict], *, fx_rate: float) -> list[dict]:
+def _enrich_positions(items: list[dict], *, display_currency: str) -> list[dict]:
     use_realtime = _settings_service.get().display_realtime_prices
     enriched = []
     quote_cache: dict[str, tuple[float, bool, str]] = {}
@@ -790,28 +799,13 @@ def _enrich_positions(items: list[dict], *, fx_rate: float) -> list[dict]:
         else:
             pos["daily_change"] = 0.0
             pos["daily_change_pct"] = 0.0
-        source_values = {
-            key: pos.get(key)
-            for key in [
-                "mark_price_snapshot",
-                "market_value_snapshot",
-                "cost_basis_money",
-                "cost_basis_adjusted",
-                "average_cost_price",
-                "cost_price_moving_weighted",
-                "cost_price_adjusted",
-                "unrealized_pnl_snapshot",
-                "fifo_pnl_unrealized",
-                "realized_pnl_total",
-                "daily_change",
-                "realtime_price",
-                "realtime_value",
-            ]
-            if key in pos
-        }
-        pos["source_values"] = source_values
-        for key in source_values:
-            pos[key] = convert_money(pos.get(key), fx_rate)
+        conversion = resolve_position_display_fx(
+            raw_repository=_raw_repository,
+            position=pos,
+            account_base_currency=display_currency,
+            display_currency=display_currency,
+        )
+        pos = convert_position_money_values(pos, conversion)
         pos["industry"] = (
             _industry_mapping_service.get(sym)
             if _industry_mapping_service is not None and sym

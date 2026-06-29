@@ -63,25 +63,26 @@ export function formatInteger(value: unknown): string {
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(parsed);
 }
 
-export function formatCurrency(value: unknown, currency = "USD", digits = 2): string {
+export function formatCurrency(value: unknown, currency = "USD", digits?: number): string {
   const parsed = asOptionalNumber(value);
   if (parsed === null) return "-";
   const normalizedCurrency = normalizeCurrencyCode(currency);
+  const fractionDigits = digits ?? (normalizedCurrency === "KRW" ? 0 : 2);
   const customSymbol = currencySymbol(normalizedCurrency);
   if (customSymbol) {
     const sign = parsed < 0 ? "-" : "";
-    return `${sign}${customSymbol}${formatNumber(Math.abs(parsed), digits)}`;
+    return `${sign}${customSymbol}${formatNumber(Math.abs(parsed), fractionDigits)}`;
   }
   try {
     return new Intl.NumberFormat("zh-CN", {
       style: "currency",
       currency: normalizedCurrency,
       currencyDisplay: "symbol",
-      maximumFractionDigits: digits,
-      minimumFractionDigits: digits,
+      maximumFractionDigits: fractionDigits,
+      minimumFractionDigits: fractionDigits,
     }).format(parsed);
   } catch {
-    return `${normalizedCurrency} ${formatNumber(parsed, digits)}`;
+    return `${normalizedCurrency} ${formatNumber(parsed, fractionDigits)}`;
   }
 }
 
@@ -233,5 +234,6 @@ function currencySymbol(currency: string): string | null {
   if (currency === "HKD") return "HK$";
   if (currency === "CNY") return "¥";
   if (currency === "CNH") return "CN¥";
+  if (currency === "KRW") return "₩";
   return null;
 }

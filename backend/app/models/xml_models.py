@@ -68,6 +68,8 @@ class PositionSnapshotRecord:
     cost_basis_money: str
     average_cost_price: str
     unrealized_pnl_snapshot: str
+    currency: str = ""
+    fx_rate_to_base: str = ""
     expiry: str = ""
     strike: str = ""
     put_call: str = ""

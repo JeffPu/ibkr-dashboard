@@ -8,6 +8,13 @@ from urllib.request import Request, urlopen
 import httpx
 
 
+TRANSIENT_SEND_REQUEST_ERROR_CODES = {"1004"}
+
+
+class FlexStatementPendingError(RuntimeError):
+    """Raised when IBKR accepted the Flex request but the statement is not ready."""
+
+
 class FlexStatementClient:
     """IBKR Flex Web Service client.
 
@@ -61,7 +68,15 @@ class FlexStatementClient:
             raise RuntimeError(f"flex send request failed: {response.status_code}")
         reference_code = _extract_xml_field(response.text, "ReferenceCode")
         if not reference_code:
-            raise RuntimeError("flex send request missing reference code")
+            error_code = _extract_xml_field(response.text, "ErrorCode")
+            flex_error = _format_flex_error(response.text, operation="send request")
+            if flex_error:
+                if error_code in TRANSIENT_SEND_REQUEST_ERROR_CODES:
+                    raise FlexStatementPendingError(flex_error)
+                raise RuntimeError(flex_error)
+            status = _extract_xml_field(response.text, "Status")
+            suffix = f" (status={status})" if status else ""
+            raise RuntimeError(f"flex send request missing reference code{suffix}")
         return reference_code
 
     def download_statement(self, *, token: str, reference_code: str) -> str:
@@ -79,13 +94,26 @@ class FlexStatementClient:
         token: str,
         query_id: str,
         max_attempts: int = 5,
-        poll_interval_seconds: float = 1.0,
+        poll_interval_seconds: float = 5.0,
         sleeper: Callable[[float], object] | None = None,
     ) -> str:
         if max_attempts <= 0:
             raise ValueError("max_attempts must be greater than 0")
-        reference_code = self.request_reference_code(token=token, query_id=query_id)
-        sleep_fn = sleeper or (lambda _: None)
+        sleep_fn = sleeper or time.sleep
+
+        reference_code = ""
+        last_pending_error: FlexStatementPendingError | None = None
+        for attempt in range(max_attempts):
+            try:
+                reference_code = self.request_reference_code(token=token, query_id=query_id)
+                break
+            except FlexStatementPendingError as exc:
+                last_pending_error = exc
+                if attempt < max_attempts - 1:
+                    sleep_fn(poll_interval_seconds)
+        else:
+            assert last_pending_error is not None
+            raise RuntimeError(str(last_pending_error)) from last_pending_error
 
         for attempt in range(max_attempts):
             statement = self.download_statement(token=token, reference_code=reference_code)
@@ -101,10 +129,37 @@ def _extract_xml_field(xml_text: str, tag: str) -> str | None:
         root = ET.fromstring(xml_text)
     except ET.ParseError:
         return None
-    node = root.find(f".//{tag}")
+    node = _find_xml_node(root, tag)
     if node is None or node.text is None:
         return None
     return node.text.strip()
+
+
+def _find_xml_node(root: ET.Element, tag: str) -> ET.Element | None:
+    for node in root.iter():
+        if _local_xml_name(node.tag) == tag:
+            return node
+    return None
+
+
+def _local_xml_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def _format_flex_error(xml_text: str, *, operation: str) -> str | None:
+    status = _extract_xml_field(xml_text, "Status")
+    error_code = _extract_xml_field(xml_text, "ErrorCode")
+    error_message = _extract_xml_field(xml_text, "ErrorMessage")
+    if not error_code and not error_message and (status or "").lower() != "fail":
+        return None
+    parts = [f"IBKR Flex {operation} failed"]
+    if error_code:
+        parts.append(f" [{error_code}]")
+    if error_message:
+        parts.append(f": {error_message}")
+    elif status:
+        parts.append(f" (status={status})")
+    return "".join(parts)
 
 
 def _looks_like_ready_statement(xml_text: str) -> bool:
@@ -112,4 +167,4 @@ def _looks_like_ready_statement(xml_text: str) -> bool:
         root = ET.fromstring(xml_text)
     except ET.ParseError:
         return False
-    return root.tag == "FlexQueryResponse"
+    return _local_xml_name(root.tag) == "FlexQueryResponse"

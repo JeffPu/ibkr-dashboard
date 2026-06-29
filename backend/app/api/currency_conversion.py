@@ -174,5 +174,87 @@ def resolve_display_fx(
     }
 
 
+def resolve_position_display_fx(
+    *,
+    raw_repository: RawRepository,
+    position: dict,
+    account_base_currency: str,
+    display_currency: str,
+) -> dict:
+    account_code = normalize_currency_code(account_base_currency)
+    display_code = normalize_currency_code(display_currency)
+    source_code = normalize_currency_code(position.get("currency"), account_code)
+    report_date = str(position.get("report_date", "") or "")
+    if source_code == display_code:
+        return resolve_display_fx(
+            raw_repository=raw_repository,
+            source_currency=source_code,
+            display_currency=display_code,
+            report_date=report_date,
+        )
+
+    rate_to_base = _to_float(
+        position.get("fx_rate_to_base", position.get("fxRateToBase"))
+    )
+    if source_code != account_code and rate_to_base > 0:
+        account_to_display = resolve_display_fx(
+            raw_repository=raw_repository,
+            source_currency=account_code,
+            display_currency=display_code,
+            report_date=report_date,
+        )
+        if account_to_display["status"] != "missing_rate":
+            return {
+                "status": "converted",
+                "source_currency": source_code,
+                "display_currency": display_code,
+                "fx_source_currency": source_code,
+                "fx_target_currency": display_code,
+                "rate": rate_to_base * _to_float(account_to_display.get("rate")),
+                "rate_date": account_to_display.get("rate_date") or report_date or None,
+            }
+
+    return resolve_display_fx(
+        raw_repository=raw_repository,
+        source_currency=source_code,
+        display_currency=display_code,
+        report_date=report_date,
+    )
+
+
+def convert_position_money_values(position: dict, conversion: dict) -> dict:
+    row = dict(position)
+    money_keys = (
+        "mark_price_snapshot",
+        "market_value_snapshot",
+        "position_value",
+        "cost_basis_money",
+        "cost_basis_adjusted",
+        "average_cost_price",
+        "cost_basis_price",
+        "cost_price_moving_weighted",
+        "cost_price_adjusted",
+        "unrealized_pnl_snapshot",
+        "fifo_pnl_unrealized",
+        "realized_pnl_total",
+        "previous_mark_price_snapshot",
+        "previous_price",
+        "daily_change",
+        "realtime_price",
+        "realtime_value",
+        "market_value",
+        "unrealized_pnl",
+    )
+    source_values = {key: row[key] for key in money_keys if key in row}
+    rate = _to_float(conversion.get("rate")) or 1.0
+    for key in source_values:
+        row[key] = convert_money(row[key], rate)
+    row["source_values"] = source_values
+    row["source_currency"] = conversion["source_currency"]
+    row["display_currency"] = conversion["display_currency"]
+    row["currency_conversion"] = {**conversion, "rate": round(rate, 8)}
+    return row
+
+
 def convert_money(value: object, rate: float) -> float:
     return round(_to_float(value) * rate, 2)

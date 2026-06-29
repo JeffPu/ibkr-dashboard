@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "dev:all": "bash ./scripts/dev-all.sh"
+    "dev:all": "bash ./scripts/dev-all.sh",
+    "verify": "npm run verify:frontend && npm run verify:backend",
+    "verify:frontend": "npm --prefix frontend run build",
+    "verify:backend": "cd backend && ES_BACKEND=in_memory $(if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; else printf '%s' python3; fi) -m pytest -q tests/"
   }
 }

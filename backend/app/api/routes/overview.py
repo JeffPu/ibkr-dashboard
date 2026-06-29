@@ -6,8 +6,10 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter
 
 from app.api.currency_conversion import convert_money as _convert_money
+from app.api.currency_conversion import convert_position_money_values as _convert_position_money_values
 from app.api.currency_conversion import normalize_currency_code as _normalize_currency_code
 from app.api.currency_conversion import resolve_display_fx as _resolve_display_fx
+from app.api.currency_conversion import resolve_position_display_fx as _resolve_position_display_fx
 from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
 from app.api.time_normalization import normalize_date_to_iso
 from app.api.time_normalization import normalize_datetime_to_local_iso
@@ -734,6 +736,7 @@ def _compute_unrealized_pnl_for_report_date(
     raw_repository: RawRepository,
     account_id: str,
     report_date: str,
+    account_base_currency: str,
 ) -> float | None:
     if not account_id or not report_date:
         return None
@@ -749,7 +752,16 @@ def _compute_unrealized_pnl_for_report_date(
     for position in positions:
         if position.get("level_of_detail") not in {"SUMMARY", None, ""}:
             continue
-        total += _to_float(position.get("unrealized_pnl_snapshot", position.get("fifo_pnl_unrealized", 0)))
+        conversion = _resolve_position_display_fx(
+            raw_repository=raw_repository,
+            position=position,
+            account_base_currency=account_base_currency,
+            display_currency=account_base_currency,
+        )
+        total += _convert_money(
+            position.get("unrealized_pnl_snapshot", position.get("fifo_pnl_unrealized", 0)),
+            _to_float(conversion.get("rate")) or 1.0,
+        )
         matched = True
     return round(total, 2) if matched else None
 
@@ -929,6 +941,28 @@ def _fetch_risk_histories(symbols: list[str], *, start_date: str, end_date: str)
         return dict(executor.map(fetch, symbols))
 
 
+def _convert_position_rows(
+    rows: list[dict],
+    *,
+    account_base_currency: str,
+    display_currency: str,
+) -> list[dict]:
+    if _raw_repository is None:
+        return [dict(row) for row in rows]
+    return [
+        _convert_position_money_values(
+            row,
+            _resolve_position_display_fx(
+                raw_repository=_raw_repository,
+                position=row,
+                account_base_currency=account_base_currency,
+                display_currency=display_currency,
+            ),
+        )
+        for row in rows
+    ]
+
+
 @router.get("/api/overview/risk-warning", responses=STORAGE_UNAVAILABLE_OPENAPI_RESPONSE)
 def get_overview_risk_warning(
     benchmark: str | None = "qqq",
@@ -953,6 +987,16 @@ def get_overview_risk_warning(
     current_positions, all_positions = _load_latest_position_rows(_raw_repository, account_id, report_date)
     if not current_positions:
         return _empty_risk_warning(selected_benchmark, beta_window, custom_drawdown, "missing_position_snapshots")
+    current_positions = _convert_position_rows(
+        current_positions,
+        account_base_currency=account_base_currency,
+        display_currency=account_base_currency,
+    )
+    all_positions = _convert_position_rows(
+        all_positions,
+        account_base_currency=account_base_currency,
+        display_currency=account_base_currency,
+    )
 
     currency_conversion = _resolve_display_fx(
         raw_repository=_raw_repository,
@@ -1253,6 +1297,9 @@ def get_overview() -> dict:
                 symbol,
                 {
                     "symbol": symbol,
+                    "report_date": p.get("report_date"),
+                    "currency": p.get("currency"),
+                    "fx_rate_to_base": p.get("fx_rate_to_base", p.get("fxRateToBase")),
                     "quantity": 0.0,
                     "market_value_snapshot": 0.0,
                     "unrealized_pnl_snapshot": 0.0,
@@ -1266,6 +1313,11 @@ def get_overview() -> dict:
                 p.get("unrealized_pnl_snapshot", p.get("fifo_pnl_unrealized", 0)) or 0
             )
         latest_positions = list(aggregated.values())
+    latest_positions = _convert_position_rows(
+        latest_positions,
+        account_base_currency=account_base_currency,
+        display_currency=account_base_currency,
+    )
     positions_count = len(latest_positions)
     snapshot_positions_market_value = round(
         sum(float(p.get("market_value_snapshot", p.get("position_value", 0)) or 0) for p in latest_positions),
@@ -1305,7 +1357,10 @@ def get_overview() -> dict:
             any_realtime_quote = any_realtime_quote or is_realtime
             if is_realtime and quote_as_of:
                 quote_as_of_values.append(quote_as_of)
-            value = round(price * quantity, 2)
+            position_fx_rate = _to_float(
+                (position.get("currency_conversion") or {}).get("rate")
+            ) or 1.0
+            value = round(_convert_money(price, position_fx_rate) * quantity, 2)
         else:
             value = snapshot_value
             is_realtime = False
@@ -1364,6 +1419,11 @@ def get_overview() -> dict:
         index="ibkr_position_snapshots_v1",
         size=10000,
         term_filters={"account_id": account_id} if account_id else None,
+    )
+    all_position_rows = _convert_position_rows(
+        all_position_rows,
+        account_base_currency=account_base_currency,
+        display_currency=account_base_currency,
     )
     curve_source = _raw_repository.es.search(
         index="ibkr_account_snapshots_v1",
@@ -1633,6 +1693,7 @@ def get_overview() -> dict:
             raw_repository=_raw_repository,
             account_id=str(account_id),
             report_date=previous_report_date,
+            account_base_currency=account_base_currency,
         )
     )
     previous_realized_pnl = (

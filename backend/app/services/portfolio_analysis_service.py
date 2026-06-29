@@ -9,6 +9,9 @@ from statistics import mean
 from threading import Thread
 from typing import Any
 
+from app.api.currency_conversion import convert_position_money_values
+from app.api.currency_conversion import normalize_currency_code
+from app.api.currency_conversion import resolve_position_display_fx
 from app.api.portfolio_analysis_contracts import AINarrativePayload
 from app.api.portfolio_analysis_contracts import AnalysisStatus
 from app.api.portfolio_analysis_contracts import EChartsPayload
@@ -755,6 +758,8 @@ class PortfolioAnalysisService:
         latest = self._raw_repository.get_latest_account_snapshot()
         account_id = str((latest or {}).get("account_id", "") or "")
         report_date = str((latest or {}).get("report_date", "") or "")
+        account_base_currency = normalize_currency_code((latest or {}).get("base_currency"))
+        display_currency = normalize_currency_code(self._settings_service.get().base_currency)
         filters = {"account_id": account_id, "report_date": report_date} if account_id and report_date else None
         rows = self._raw_repository.es.search(
             index="ibkr_position_snapshots_v1",
@@ -770,7 +775,21 @@ class PortfolioAnalysisService:
         latest_rows = [row for row in rows if str(row.get("report_date", "") or "") == latest_date]
         summary_rows = [row for row in latest_rows if str(row.get("level_of_detail", "") or "").upper() == "SUMMARY"]
         current_rows = summary_rows or latest_rows
-        return self._with_industry_enrichment(_with_position_daily_changes(current_rows, all_rows or rows, latest_date))
+        enriched = self._with_industry_enrichment(
+            _with_position_daily_changes(current_rows, all_rows or rows, latest_date)
+        )
+        return [
+            convert_position_money_values(
+                position,
+                resolve_position_display_fx(
+                    raw_repository=self._raw_repository,
+                    position=position,
+                    account_base_currency=account_base_currency,
+                    display_currency=display_currency,
+                ),
+            )
+            for position in enriched
+        ]
 
     def _with_industry_enrichment(self, positions: list[dict]) -> list[dict]:
         if self._industry_mapping_service is None:

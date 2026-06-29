@@ -70,6 +70,7 @@ const currencyOptions = [
   { value: "USD", label: "USD" },
   { value: "HKD", label: "HKD" },
   { value: "CNY", label: "CNY" },
+  { value: "KRW", label: "KRW" },
 ];
 
 const timezoneOptions = [

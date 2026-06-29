@@ -21,6 +21,7 @@
 # Keep repository uploads focused on code and README only.
 *.md
 !README.md
+!AGENTS.md
 *.png
 *.jpg
 *.jpeg

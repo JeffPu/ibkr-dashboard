@@ -104,6 +104,8 @@ def parse_xml_content(root: ET.Element) -> ParsedXmlData:
                 cost_basis_money=node.attrib.get("costBasisMoney", "0"),
                 average_cost_price=node.attrib.get("costBasisPrice") or node.attrib.get("openPrice", "0"),
                 unrealized_pnl_snapshot=node.attrib.get("fifoPnlUnrealized", "0"),
+                currency=node.attrib.get("currency", ""),
+                fx_rate_to_base=node.attrib.get("fxRateToBase", ""),
                 **_option_fields(node),
             )
         )

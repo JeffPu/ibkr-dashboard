@@ -249,10 +249,11 @@ export function PositionsPage() {
   };
 
   const renderCost = (row: ApiRecord) => {
+    const sourceValues = asRecord(row.source_values);
     const value = costMode === "moving"
-      ? row.cost_price_moving_weighted ?? row.average_cost_price
-      : row.cost_price_adjusted;
-    return formatCurrency(value, currency);
+      ? sourceValues.cost_price_moving_weighted ?? sourceValues.average_cost_price ?? row.cost_price_moving_weighted ?? row.average_cost_price
+      : sourceValues.cost_price_adjusted ?? row.cost_price_adjusted;
+    return formatCurrency(value, asText(row.source_currency ?? row.currency, currency));
   };
   const costSortKey = costMode === "moving" ? "cost_price_moving_weighted" : "cost_price_adjusted";
 
@@ -367,7 +368,7 @@ export function PositionsPage() {
             { key: "industry", label: "行业" },
             { key: "quantity", label: "数量", align: "right", render: (row) => formatNumber(row.quantity, 0) },
             { key: costSortKey, label: "成本价", align: "right", render: renderCost },
-            { key: "realtime_price", label: "市价", align: "right", render: (row) => formatCurrency(row.realtime_price, currency) },
+            { key: "realtime_price", label: "市价", align: "right", render: (row) => formatCurrency(asRecord(row.source_values).realtime_price ?? row.realtime_price, asText(row.source_currency ?? row.currency, currency)) },
             {
               key: "daily_change_pct",
               label: "日涨跌",
@@ -597,16 +598,24 @@ function PositionDetailModal({
 }) {
   const detailPosition = asRecord(detail?.position);
   const source = Object.keys(detailPosition).length ? detailPosition : selected;
-  const costPrice = source.cost_price_moving_weighted
+  const sourceValues = asRecord(source.source_values);
+  const selectedSourceValues = asRecord(selected.source_values);
+  const priceCurrency = asText(detail?.price_currency ?? source.source_currency ?? source.currency, currency);
+  const costPrice = sourceValues.cost_price_moving_weighted
+    ?? sourceValues.average_cost_price
+    ?? sourceValues.cost_price_adjusted
+    ?? selectedSourceValues.cost_price_moving_weighted
+    ?? selectedSourceValues.average_cost_price
+    ?? selectedSourceValues.cost_price_adjusted
+    ?? source.cost_price_moving_weighted
     ?? source.average_cost_price
-    ?? source.cost_price_adjusted
-    ?? selected.cost_price_moving_weighted
-    ?? selected.average_cost_price
-    ?? selected.cost_price_adjusted;
-  const currentPrice = source.realtime_price
-    ?? source.mark_price_snapshot
-    ?? selected.realtime_price
-    ?? selected.mark_price_snapshot;
+    ?? source.cost_price_adjusted;
+  const currentPrice = sourceValues.realtime_price
+    ?? sourceValues.mark_price_snapshot
+    ?? selectedSourceValues.realtime_price
+    ?? selectedSourceValues.mark_price_snapshot
+    ?? source.realtime_price
+    ?? source.mark_price_snapshot;
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="position-modal" role="dialog" aria-modal="true" aria-labelledby="position-modal-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -620,11 +629,11 @@ function PositionDetailModal({
         <div className="detail-grid position-detail-grid">
           <MetricCard label="数量" value={formatNumber(source.quantity ?? selected.quantity, 0)} />
           <MetricCard label="未实现盈亏" value={<DeltaText value={source.unrealized_pnl_snapshot ?? selected.unrealized_pnl_snapshot} currency={currency} />} tone={deltaClass(source.unrealized_pnl_snapshot ?? selected.unrealized_pnl_snapshot)} />
-          <MetricCard label="成本价" value={formatCurrency(costPrice, currency)} />
-          <MetricCard label="当前价" value={formatCurrency(currentPrice, currency)} />
+          <MetricCard label="成本价" value={formatCurrency(costPrice, priceCurrency)} />
+          <MetricCard label="当前价" value={formatCurrency(currentPrice, priceCurrency)} />
           {loading ? <LoadingBlock label="正在读取个股详情" /> : null}
           {error ? <div className="inline-error">{error}</div> : null}
-          <PositionChart detail={detail} currency={currency} symbol={asText(selected.symbol)} />
+          <PositionChart detail={detail} currency={priceCurrency} symbol={asText(selected.symbol)} />
         </div>
       </section>
     </div>
