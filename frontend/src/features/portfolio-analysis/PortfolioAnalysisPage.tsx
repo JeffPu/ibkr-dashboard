@@ -134,7 +134,11 @@ export function PortfolioAnalysisPage() {
         )}
       </DataState>
       {aiProgressOpen && aiProgress ? (
-        <AIRefreshModal progress={aiProgress} onClose={() => setAiProgressOpen(false)} />
+        <AIRefreshModal
+          progress={aiProgress}
+          onClose={() => setAiProgressOpen(false)}
+          onRetry={() => void refreshAI()}
+        />
       ) : null}
     </PortfolioAnalysisShell>
   );
@@ -166,7 +170,15 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
-function AIRefreshModal({ progress, onClose }: { progress: AIRefreshProgress; onClose: () => void }) {
+function AIRefreshModal({
+  progress,
+  onClose,
+  onRetry,
+}: {
+  progress: AIRefreshProgress;
+  onClose: () => void;
+  onRetry: () => void;
+}) {
   const finished = ["complete", "fallback", "error"].includes(progress.phase);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -229,6 +241,9 @@ function AIRefreshModal({ progress, onClose }: { progress: AIRefreshProgress; on
                   <small>{detail}</small>
                   {progress.stageDurationsMs[stage] !== undefined ? (
                     <small>耗时 {formatDuration(progress.stageDurationsMs[stage])}</small>
+                  ) : null}
+                  {stepState === "error" ? (
+                    <button type="button" className="ai-progress-step__retry" onClick={onRetry}>重试此步骤</button>
                   ) : null}
                 </div>
                 <i aria-hidden="true">{stepState === "done" ? "✓" : stepState === "error" ? "!" : ""}</i>

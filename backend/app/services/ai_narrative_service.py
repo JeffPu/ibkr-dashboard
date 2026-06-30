@@ -2192,10 +2192,12 @@ def _validate_portfolio_overlay(
         if canonical_sources:
             raw_sources = list(canonical_sources.values())
             research_status = "ready"
-        if not isinstance(raw_risks, list) or not 3 <= len(raw_risks) <= 5:
+        if not isinstance(raw_risks, list) or not raw_risks:
             raise ValueError(f"risk_point_count_invalid:{position_key}")
-        if not isinstance(raw_tracking, list) or not 3 <= len(raw_tracking) <= 5:
+        if not isinstance(raw_tracking, list) or not raw_tracking:
             raise ValueError(f"tracking_point_count_invalid:{position_key}")
+        raw_risks = raw_risks[:5]
+        raw_tracking = raw_tracking[:5]
         if not isinstance(raw_sources, list):
             raise ValueError(f"sources_not_array:{position_key}")
         if any(

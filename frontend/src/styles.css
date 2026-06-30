@@ -4771,6 +4771,11 @@ input[type="file"] {
   gap: 4px;
 }
 
+.ai-progress-step__retry {
+  justify-self: start;
+  margin-top: 4px;
+}
+
 .ai-progress-step i {
   display: grid;
   place-items: center;

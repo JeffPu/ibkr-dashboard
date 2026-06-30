@@ -1022,6 +1022,8 @@ def test_deepseek_portfolio_overlay_restores_missing_sources_from_tavily_values(
         overlay["risk_rows"][0]["research_status"] = "missing"
         overlay["risk_rows"][0]["logic_status"] = ""
         overlay["risk_rows"][0]["recommendation"] = ""
+        overlay["risk_rows"][0]["risk_points"] = overlay["risk_rows"][0]["risk_points"][:1]
+        overlay["risk_rows"][0]["tracking_points"] *= 2
         assert result["sources"][0]["title"] == "Tavily 原始标题"
         return FakeResponse({"choices": [{"message": {"content": json.dumps(overlay, ensure_ascii=False)}}]})
 
@@ -1048,6 +1050,8 @@ def test_deepseek_portfolio_overlay_restores_missing_sources_from_tavily_values(
     }
     assert overlay["risk_rows"][0]["logic_status"].startswith("重点风险：")
     assert overlay["risk_rows"][0]["recommendation"].startswith("重点跟踪：")
+    assert len(overlay["risk_rows"][0]["risk_points"]) == 1
+    assert len(overlay["risk_rows"][0]["tracking_points"]) == 5
 
 
 def test_minimax_provider_fails_closed_without_key() -> None:
