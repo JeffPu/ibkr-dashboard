@@ -6,6 +6,7 @@ import type {
   EChartsPayload,
   PageState,
   PortfolioAnalysisResponse,
+  PortfolioRefreshJob,
   PortfolioRiskRow,
   PortfolioAnalysisSectionKey,
   StandardMetric,
@@ -21,10 +22,24 @@ const tabs: Array<{ key: PortfolioAnalysisSectionKey; label: string }> = [
   { key: "portfolio", label: "持仓分析" },
 ];
 
+type AIRefreshPhase = "submitting" | "preparing" | "researching" | "analyzing" | "persisting" | "complete" | "fallback" | "error";
+
+interface AIRefreshProgress {
+  phase: AIRefreshPhase;
+  message: string;
+  completedPositions: number;
+  totalPositions: number;
+  stageDurationsMs: Record<string, number>;
+  reason: string | null;
+  failedStage: PortfolioRefreshJob["stage"] | null;
+}
+
 export function PortfolioAnalysisPage() {
   const [section, setSection] = useState<PortfolioAnalysisSectionKey>("portfolio");
   const [state, setState] = useState<PageState<PortfolioAnalysisResponse>>({ data: null, loading: true, error: null });
   const [aiRefreshing, setAiRefreshing] = useState(false);
+  const [aiProgress, setAiProgress] = useState<AIRefreshProgress | null>(null);
+  const [aiProgressOpen, setAiProgressOpen] = useState(false);
   const responseCache = useRef<Map<string, PortfolioAnalysisResponse>>(new Map());
 
   const load = useCallback(async (options?: { showLoading?: boolean; force?: boolean; skipCache?: boolean }) => {
@@ -51,28 +66,45 @@ export function PortfolioAnalysisPage() {
     void load();
   }, [load]);
 
-  useEffect(() => {
-    const portfolio = state.data?.sections.portfolio;
-    if (section !== "portfolio" || portfolio?.analysis_meta?.ai_overlay_status !== "pending") return undefined;
-    const timer = window.setTimeout(() => {
-      void load({ showLoading: false, skipCache: true });
-    }, 3500);
-    return () => window.clearTimeout(timer);
-  }, [load, section, state.data?.sections.portfolio?.analysis_meta?.ai_overlay_status]);
-
   const refreshAI = useCallback(async () => {
     setAiRefreshing(true);
+    setAiProgressOpen(true);
+    setAiProgress({
+      phase: "submitting",
+      message: "正在提交当前分区与最新持仓快照。",
+      completedPositions: 0,
+      totalPositions: 0,
+      stageDurationsMs: {},
+      reason: null,
+      failedStage: null,
+    });
     try {
-      await api.refreshPortfolioAnalysisNarrative({ section });
-      window.setTimeout(() => {
-        void load({ showLoading: false, skipCache: true });
-      }, 800);
-      window.setTimeout(() => {
-        void load({ showLoading: false, skipCache: true }).finally(() => setAiRefreshing(false));
-      }, 6000);
+      let job = await api.refreshPortfolioAnalysisNarrative({ section });
+      setAiProgress(aiRefreshProgress(job));
+      for (let attempt = 0; attempt < 240; attempt += 1) {
+        if (["ready", "fallback", "error"].includes(job.status)) {
+          await load({ showLoading: false, skipCache: true });
+          setAiRefreshing(false);
+          return;
+        }
+        await wait(1000);
+        job = await api.portfolioAnalysisRefreshJob(job.job_id);
+        setAiProgress(aiRefreshProgress(job));
+      }
+      throw new Error("AI 分析任务超过 4 分钟仍未结束");
     } catch (error) {
       setAiRefreshing(false);
-      setState((prev) => ({ ...prev, error: error instanceof Error ? error.message : "unknown error" }));
+      const message = error instanceof Error ? error.message : "unknown error";
+      setAiProgress({
+        phase: "error",
+        message: `刷新失败：${message}`,
+        completedPositions: 0,
+        totalPositions: 0,
+        stageDurationsMs: {},
+        reason: message,
+        failedStage: "accepted",
+      });
+      setState((prev) => ({ ...prev, error: message }));
     }
   }, [load, section]);
 
@@ -101,8 +133,153 @@ export function PortfolioAnalysisPage() {
           </>
         )}
       </DataState>
+      {aiProgressOpen && aiProgress ? (
+        <AIRefreshModal progress={aiProgress} onClose={() => setAiProgressOpen(false)} />
+      ) : null}
     </PortfolioAnalysisShell>
   );
+}
+
+function aiRefreshProgress(job: PortfolioRefreshJob): AIRefreshProgress {
+  const phaseByStage: Record<string, AIRefreshPhase> = {
+    accepted: "submitting",
+    preparing_inputs: "preparing",
+    researching_web: "researching",
+    analyzing_risks: "analyzing",
+    persisting: "persisting",
+    ready: "complete",
+    fallback: "fallback",
+    error: "error",
+  };
+  return {
+    phase: phaseByStage[job.stage] ?? "error",
+    message: job.message,
+    completedPositions: job.completed_positions,
+    totalPositions: job.total_positions,
+    stageDurationsMs: job.stage_durations_ms,
+    reason: job.reason ? aiFallbackLabel(job.reason) : null,
+    failedStage: job.failed_stage,
+  };
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function AIRefreshModal({ progress, onClose }: { progress: AIRefreshProgress; onClose: () => void }) {
+  const finished = ["complete", "fallback", "error"].includes(progress.phase);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      previousFocus?.focus();
+    };
+  }, [onClose]);
+  const stages = [
+    ["accepted", "提交分析任务", "后台已受理，不在请求线程中等待模型"],
+    ["preparing_inputs", "整理持仓输入", "读取全部持仓并生成稳定 position key"],
+    ["researching_web", "联网检索证据", "DeepSeek 规划问题，Tavily 返回可追溯来源"],
+    ["analyzing_risks", "生成风险分析", "逐项整理风险、跟踪条件和组合建议"],
+    ["persisting", "校验并更新页面", "全量契约校验通过后才保存并应用"],
+  ];
+  return (
+    <div className="modal-backdrop ai-progress-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className={`ai-progress-modal ai-progress-modal--${progress.phase}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ai-progress-title"
+        aria-describedby="ai-progress-message"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="ai-progress-modal__header">
+          <div>
+            <span className="eyebrow">READ-ONLY AI RUN</span>
+            <h2 id="ai-progress-title">AI 分析进度</h2>
+          </div>
+          <button ref={closeButtonRef} type="button" className="modal-close-button" onClick={onClose} aria-label="关闭AI分析过程">×</button>
+        </header>
+
+        <div className="ai-progress-status" aria-live="polite">
+          <span className="ai-progress-status__signal" aria-hidden="true" />
+          <div>
+            <small>{aiRefreshPhaseLabel(progress.phase)}</small>
+            <strong id="ai-progress-message">{progress.message}</strong>
+            {progress.totalPositions > 0 ? (
+              <small>已研究 {progress.completedPositions} / {progress.totalPositions} 个持仓</small>
+            ) : null}
+            {progress.reason ? <small title={progress.reason}>原因：{progress.reason}</small> : null}
+          </div>
+        </div>
+
+        <ol className="ai-progress-steps">
+          {stages.map(([stage, title, detail], index) => {
+            const stepState = aiRefreshStepState(progress.phase, index, progress.failedStage);
+            return (
+              <li className={`ai-progress-step ai-progress-step--${stepState}`} key={title}>
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <div>
+                  <strong>{title}</strong>
+                  <small>{detail}</small>
+                  {progress.stageDurationsMs[stage] !== undefined ? (
+                    <small>耗时 {formatDuration(progress.stageDurationsMs[stage])}</small>
+                  ) : null}
+                </div>
+                <i aria-hidden="true">{stepState === "done" ? "✓" : stepState === "error" ? "!" : ""}</i>
+              </li>
+            );
+          })}
+        </ol>
+
+        <footer className="ai-progress-modal__footer">
+          <span>只读分析 · 不包含下单动作</span>
+          {finished ? <button type="button" onClick={onClose}>完成</button> : <small>关闭弹窗不会中断后台任务</small>}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function aiRefreshPhaseLabel(phase: AIRefreshPhase): string {
+  if (phase === "submitting") return "正在连接分析服务";
+  if (phase === "preparing") return "正在整理持仓";
+  if (phase === "researching") return "正在联网检索";
+  if (phase === "analyzing") return "正在分析风险";
+  if (phase === "persisting") return "正在校验结果";
+  if (phase === "complete") return "分析完成";
+  if (phase === "fallback") return "已安全降级";
+  return "刷新失败";
+}
+
+function aiRefreshStepState(
+  phase: AIRefreshPhase,
+  index: number,
+  failedStage: PortfolioRefreshJob["stage"] | null,
+): "waiting" | "active" | "done" | "error" {
+  const activeIndex = { submitting: 0, preparing: 1, researching: 2, analyzing: 3, persisting: 4 }[phase];
+  if (activeIndex !== undefined) return index < activeIndex ? "done" : index === activeIndex ? "active" : "waiting";
+  if (phase === "complete") return "done";
+  const failedIndex = {
+    accepted: 0,
+    preparing_inputs: 1,
+    researching_web: 2,
+    analyzing_risks: 3,
+    persisting: 4,
+    ready: 4,
+    fallback: 4,
+    error: 4,
+  }[failedStage ?? "error"];
+  return index < failedIndex ? "done" : index === failedIndex ? "error" : "waiting";
+}
+
+function formatDuration(milliseconds: number): string {
+  return milliseconds < 1000 ? `${milliseconds} ms` : `${(milliseconds / 1000).toFixed(1)} s`;
 }
 
 function PortfolioAnalysisShell({
@@ -335,19 +512,27 @@ function PortfolioPanel({ data }: { data: PortfolioAnalysisResponse }) {
 function PortfolioRiskKpis({ portfolio }: { portfolio: PortfolioAnalysisResponse["sections"]["portfolio"] }) {
   const alerts = portfolio.alerts ?? [];
   const rows = portfolio.risk_rows ?? [];
-  const high = alerts.filter((alert) => recordText(alert, "severity", "low") === "high").length;
-  const medium = alerts.filter((alert) => recordText(alert, "severity", "low") === "medium").length;
   const maxWeight = rows.reduce((max, row) => Math.max(max, row.weight_pct ?? 0), 0);
-  const aiReady = rows.filter((row) => isModelAiSource(String(row.source ?? ""))).length;
+  const aiReady = rows.filter((row) => row.research_status === "ready").length;
   const aiCoverage = rows.length ? aiReady / rows.length * 100 : null;
   const meta = portfolio.analysis_meta ?? {};
   const externalReady = recordBool(meta, "external_ready");
+  const modelRisks = rows.flatMap((row) => row.risk_points ?? []);
+  const high = externalReady
+    ? modelRisks.filter((risk) => risk.severity === "high").length
+    : alerts.filter((alert) => recordText(alert, "severity", "low") === "high").length;
+  const medium = externalReady
+    ? modelRisks.filter((risk) => risk.severity === "medium").length
+    : alerts.filter((alert) => recordText(alert, "severity", "low") === "medium").length;
+  const coverageLabel = rows.length && aiCoverage !== null
+    ? `${aiReady}/${rows.length} (${formatNumber(aiCoverage, 0)}%) · 缺${rows.length - aiReady}`
+    : "-";
   const items = [
     { icon: "alert", label: "高优先级风险", value: formatNumber(high, 0), tone: high > 0 ? "negative" : "positive" },
     { icon: "radar", label: "中优先级风险", value: formatNumber(medium, 0), tone: medium > 0 ? "accent" : "positive" },
     { icon: "target", label: "最大单票权重", value: rows.length ? `${formatNumber(maxWeight)}%` : "-", tone: maxWeight >= 25 ? "negative" : maxWeight >= 15 ? "accent" : "neutral" },
-    { icon: "spark", label: "模型覆盖", value: aiCoverage === null ? "-" : `${formatNumber(aiCoverage, 0)}%`, tone: aiCoverage && aiCoverage >= 80 ? "positive" : "neutral" },
-    { icon: "database", label: "外部数据", value: externalReady ? "可用" : "部分可用", tone: externalReady ? "positive" : "accent" },
+    { icon: "spark", label: "联网研究覆盖", value: coverageLabel, tone: aiCoverage && aiCoverage >= 80 ? "positive" : "neutral" },
+    { icon: "database", label: "研究来源", value: externalReady ? "可追溯" : "待补充", tone: externalReady ? "positive" : "accent" },
   ];
   return (
     <div className="portfolio-kpi-strip">
@@ -511,14 +696,14 @@ function PortfolioRiskTable({ rows, currency }: { rows: PortfolioRiskRow[]; curr
             <th>当前价</th>
             <th>权重</th>
             <th>浮盈亏</th>
-            <th>AI关联度</th>
             <th>逻辑状态</th>
-            <th>建议</th>
+            <th>风险与跟踪</th>
+            <th>建议与来源</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.symbol}>
+            <tr key={row.position_key}>
               <td><strong>{row.symbol}</strong></td>
               <td>{formatCurrency(row.current_price, currency)}</td>
               <td>{formatNumber(row.weight_pct)}%</td>
@@ -526,20 +711,53 @@ function PortfolioRiskTable({ rows, currency }: { rows: PortfolioRiskRow[]; curr
                 {formatCurrency(row.unrealized_pnl, currency)}
               </td>
               <td>
-                <span className={`risk-relevance risk-relevance--${relevanceTone(row.ai_relevance)}`}>{row.ai_relevance}</span>
-              </td>
-              <td>
                 <div className="risk-cell-with-evidence">
                   <span>{row.logic_status}</span>
-                  {row.position_role ? <small>仓位角色：{row.position_role}</small> : null}
-                  {row.risk_points?.length ? <small>风险：{row.risk_points.slice(0, 2).join("；")}</small> : null}
-                  {!row.risk_points?.length && row.evidence.length ? <small>{row.evidence.slice(0, 2).join("；")}</small> : null}
+                  <small>{row.research_status === "ready" ? "已完成联网研究" : "当前为本地规则结果"}</small>
                 </div>
+              </td>
+              <td>
+                <details className="portfolio-risk-details">
+                  <summary>{row.risk_points.length} 项风险</summary>
+                  <ul>
+                    {row.risk_points.map((risk, index) => (
+                      <li key={`${risk.title}-${index}`}>
+                        <strong className={`risk-severity risk-severity--${risk.severity}`}>{risk.title}</strong>
+                        <span>{risk.detail}</span>
+                        {risk.evidence_ids.length ? <small>依据：{risk.evidence_ids.join("、")}</small> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+                <details className="portfolio-risk-details">
+                  <summary>{row.tracking_points.length} 项跟踪</summary>
+                  <ul>
+                    {row.tracking_points.map((item, index) => (
+                      <li key={`${item.item}-${index}`}>
+                        <strong>{item.item} · {trackingHorizonLabel(item.horizon)}</strong>
+                        <span>{item.why}</span>
+                        <small>重评条件：{item.trigger}</small>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               </td>
               <td>
                 <div className="risk-cell-with-evidence">
                   <span>{row.recommendation}</span>
-                  {row.tracking_points?.length ? <small>跟踪：{row.tracking_points.slice(0, 2).join("；")}</small> : null}
+                  {row.sources.length ? (
+                    <details className="portfolio-risk-details portfolio-risk-sources">
+                      <summary>{row.sources.length} 个研究来源</summary>
+                      <ul>
+                        {row.sources.map((source) => (
+                          <li key={source.id}>
+                            <a href={source.url} target="_blank" rel="noreferrer">{source.id} · {source.title}</a>
+                            {source.published_at ? <small>{source.published_at}</small> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
                   <small title={row.reason ?? undefined}>
                     {sourceLabel(row.source)} · 置信度 {Math.round((row.confidence ?? 0) * 100)}%
                   </small>
@@ -570,10 +788,10 @@ function PortfolioAIStatus({ portfolio }: { portfolio: PortfolioAnalysisResponse
       ? `AI判断：${aiProviderLabel(provider)} 正在生成，当前临时显示本地规则校验`
       : `AI判断：${aiFallbackLabel(reason)}，当前显示本地规则校验`;
   const detail = status === "ready" && !localFallback
-    ? "表格中的AI关联度、逻辑状态、建议和调仓建议已由结构化模型覆盖；数值字段仍来自持仓数据。"
+    ? "表格中的逻辑状态、风险、跟踪项、来源和组合建议来自 DeepSeek 联网研究；价格、权重和盈亏仍来自 IBKR。"
     : status === "pending"
       ? "页面会自动刷新结果。模型没有返回前，规则结果只作为临时占位。"
-      : "这不是模型结论。OpenAI/MiniMax 不可用时，页面会继续展示本地只读规则结果，避免分析卡住。";
+      : "这不是联网模型结论。DeepSeek 或 Tavily 不可用时，页面继续显示本地只读规则结果。";
   return (
     <div className={`portfolio-ai-status portfolio-ai-status--${status === "ready" && !localFallback ? "ready" : status === "pending" ? "pending" : "fallback"}`}>
       <strong>{title}</strong>
@@ -591,13 +809,13 @@ function RebalanceAdvicePanel({ advice }: { advice: PortfolioAnalysisResponse["s
     <div className="rebalance-advice">
       <div className="rebalance-card-grid">
         {cards.slice(0, 4).map((card, index) => (
-          <article className="rebalance-card" key={`${recordText(card, "title", "card")}-${index}`}>
+          <article className="rebalance-card" key={card.rank}>
             <div className="rebalance-card__top">
-              <span>{normalizeAdviceRank(recordText(card, "rank", `0${index + 1}`), index)}</span>
-              <Icon className="analysis-icon" name={recordText(card, "icon", adviceIconForIndex(index))} />
+              <span>{normalizeAdviceRank(card.rank, index)}</span>
+              <Icon className="analysis-icon" name={card.icon || adviceIconForIndex(index)} />
             </div>
-            <strong>{recordText(card, "title", adviceTitleForIndex(index))}</strong>
-            <p>{recordText(card, "body", "-")}</p>
+            <strong>{card.title || adviceTitleForIndex(index)}</strong>
+            <p>{card.body || "-"}</p>
           </article>
         ))}
       </div>
@@ -619,11 +837,15 @@ function normalizeAdviceRank(rank: string, index: number): string {
 }
 
 function adviceIconForIndex(index: number): string {
-  return ["compass", "search", "alert", "calendar"][index] ?? "check";
+  return ["alert", "search", "compass", "calendar"][index] ?? "check";
 }
 
 function adviceTitleForIndex(index: number): string {
-  return ["研究方向", "低估线索", "拥挤风险", "近期催化"][index] ?? "建议";
+  return ["组合首要风险", "优先复核持仓", "组合结构与集中度", "未来30天跟踪清单"][index] ?? "建议";
+}
+
+function trackingHorizonLabel(horizon: "7d" | "30d" | "quarterly"): string {
+  return { "7d": "7天", "30d": "30天", quarterly: "季度" }[horizon];
 }
 
 function AnalysisMeta({ meta }: { meta: ApiRecord }) {
@@ -644,7 +866,7 @@ function AnalysisMeta({ meta }: { meta: ApiRecord }) {
         {sourceLabel(recordText(meta, "source", "portfolio_positions"))}
         {" · "}
         置信度 {Math.round((recordNumber(meta, "confidence") ?? 0) * 100)}%
-        {recordBool(meta, "external_ready") ? " · 已接入外部研究信号" : " · 外部研究信号不足"}
+        {recordBool(meta, "external_ready") ? " · 联网来源可追溯" : " · 联网研究来源不足"}
         {missing.length ? ` · 缺口：${missing.slice(0, 2).join("、")}` : ""}
       </span>
     </div>
@@ -688,13 +910,6 @@ function severityLabel(severity: string): string {
     low: "观察",
   };
   return labels[severity] ?? "观察";
-}
-
-function relevanceTone(value: string): string {
-  if (value.startsWith("极高")) return "high";
-  if (value.startsWith("中")) return "medium";
-  if (value.startsWith("低")) return "low";
-  return "none";
 }
 
 function metricLabel(key: string): string {
@@ -778,8 +993,28 @@ function aiProviderLabel(provider: string): string {
 
 function aiFallbackLabel(reason: string): string {
   if (!reason) return "未返回结构化模型结果";
-  if (reason.includes("429") || reason.toLowerCase().includes("too many requests")) return "OpenAI 限流或额度不足";
+  if (reason.includes("429") || reason.toLowerCase().includes("too many requests")) return "模型或搜索服务限流/额度不足";
+  if (reason.includes("tavily")) return "Tavily 联网搜索未配置或不可用";
+  if (reason.includes("search_unauthorized")) return "Tavily 密钥无效或无权限";
+  if (reason.includes("search_rate_limited")) return "Tavily 搜索限流或额度不足";
+  if (reason.includes("search_timed_out")) return "Tavily 搜索超时";
+  if (reason.includes("search_partial")) return "部分持仓未取得可靠联网来源";
+  if (reason.includes("deepseek_unauthorized")) return "DeepSeek 密钥无效或无权限";
+  if (reason.includes("deepseek_insufficient_balance")) return "DeepSeek 余额不足";
+  if (reason.includes("deepseek_rate_limited")) return "DeepSeek 请求限流";
+  if (reason.includes("deepseek_tool_choice_unsupported")) return "当前 DeepSeek 模型不支持强制工具调用";
+  if (reason.includes("deepseek_context_length_exceeded")) return "DeepSeek 上下文长度超限";
+  if (reason.includes("deepseek_model_not_found")) return "DeepSeek 模型不可用";
+  if (reason.includes("deepseek_invalid_request")) return "DeepSeek 请求参数不兼容";
+  if (reason.includes("deepseek_service_unavailable")) return "DeepSeek 服务暂时不可用";
+  if (reason.includes("deepseek_portfolio_output_truncated")) return "DeepSeek 输出过长并被截断";
+  if (reason.includes("deepseek_portfolio_invalid_response")) return "DeepSeek 返回内容不是有效结构化结果";
+  if (reason.includes("refresh_job_deadline_exceeded")) return "分析超过服务端总时限";
+  if (reason.includes("total_budget_exceeded")) return "分析超过服务端总时限";
+  if (reason.includes("portfolio_overlay_persistence_failed")) return "分析结果保存失败";
   if (reason.includes("api_key_not_configured")) return "模型密钥未配置";
+  if (reason.includes("web_research_incomplete")) return "部分持仓未取得可靠联网来源";
+  if (reason.includes("invalid_portfolio_overlay")) return "模型结果未通过全量字段校验";
   if (reason.includes("timed_out")) return "模型调用超时";
   if (reason.includes("manual_refresh")) return "等待手动刷新AI";
   if (reason.includes("failed")) return "模型生成失败";

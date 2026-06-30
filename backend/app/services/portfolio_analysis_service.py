@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from datetime import datetime
 from datetime import timezone
@@ -7,7 +8,7 @@ from datetime import timedelta
 from functools import lru_cache
 from statistics import mean
 from threading import Thread
-from typing import Any
+from typing import Any, Callable
 
 from app.api.currency_conversion import convert_position_money_values
 from app.api.currency_conversion import normalize_currency_code
@@ -74,12 +75,14 @@ class PortfolioAnalysisService:
         market_data_provider: MarketDataProvider | None = None,
         industry_mapping_service: IndustryMappingService | None = None,
         ai_narrative_service: AINarrativeService | None = None,
+        progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self._raw_repository = raw_repository
         self._settings_service = settings_service
         self._market_data_provider = market_data_provider
         self._industry_mapping_service = industry_mapping_service
         self._ai_narrative_service = ai_narrative_service or AINarrativeService()
+        self._progress_callback = progress_callback
 
     def get_analysis(
         self,
@@ -467,7 +470,6 @@ class PortfolioAnalysisService:
         response.expiration_risk = {}
         response.hedge_suggestions = _hedge_suggestions(response, sector_rows)
         response.alerts = _risk_alerts(response, positions, sector_rows)
-        external_context = self._portfolio_external_context(_top_symbols(positions, limit=6))
         response.advisor_facts = [
             _metric(
                 value=len(positions),
@@ -489,29 +491,21 @@ class PortfolioAnalysisService:
         response.risk_rows = _portfolio_risk_rows(
             positions,
             total,
-            external_context=external_context,
             display_currency=self._settings_service.get().base_currency,
         )
         response.rebalance_advice = _portfolio_rebalance_advice(
-            positions=positions,
             risk_rows=response.risk_rows,
             alerts=response.alerts,
-            total=total,
-            ai_weight=ai_weight,
             top3_weight=top3_weight,
             downside_breadth=downside_breadth,
-            external_context=external_context,
         )
         ai_overlay = self._portfolio_ai_overlay(
             positions=positions,
             risk_rows=response.risk_rows,
-            advice=response.rebalance_advice,
             alerts=response.alerts,
             total=total,
-            ai_weight=ai_weight,
             top3_weight=top3_weight,
             downside_breadth=downside_breadth,
-            external_context=external_context,
             refresh_ai=refresh_ai,
         )
         response.risk_rows, response.rebalance_advice = _apply_portfolio_ai_overlay(
@@ -522,66 +516,33 @@ class PortfolioAnalysisService:
         response.analysis_meta = _portfolio_analysis_meta(
             rows=response.risk_rows,
             advice=response.rebalance_advice,
-            external_context=external_context,
             ai_overlay=ai_overlay,
         )
         response.charts = self._portfolio_risk_charts(positions, total)
         response.narrative = _portfolio_overlay_narrative(ai_overlay)
         return response
 
-    def _portfolio_external_context(self, symbols: list[str]) -> dict[str, Any]:
-        provider_name = str(getattr(self._market_data_provider, "name", "") or "")
-        context: dict[str, Any] = {
-            "provider": provider_name or "portfolio_rules",
-            "sentiments": {},
-            "valuation": {},
-            "missing": [],
-        }
-        if self._market_data_provider is None:
-            context["missing"].append("market_data_provider_not_configured")
-            return context
-        for symbol in symbols:
-            try:
-                sentiment = self._market_data_provider.get_sentiment(symbol)
-            except Exception as exc:
-                sentiment = {"status": "missing_data", "source": provider_name, "reason": str(exc)}
-            context["sentiments"][symbol] = sentiment
-            if sentiment.get("status") != "ready":
-                context["missing"].append(f"{symbol}:sentiment_missing")
-            if provider_name == "longbridge":
-                valuation = _latest_valuation_rank(symbol)
-                if valuation:
-                    context["valuation"][symbol] = valuation
-                else:
-                    context["missing"].append(f"{symbol}:valuation_missing")
-        return context
-
     def _portfolio_ai_overlay(
         self,
         *,
         positions: list[dict],
         risk_rows: list[PortfolioRiskRow],
-        advice: PortfolioRebalanceAdvice,
         alerts: list[dict[str, Any]],
         total: float,
-        ai_weight: float,
         top3_weight: float,
         downside_breadth: float,
-        external_context: dict[str, Any],
         refresh_ai: bool,
     ) -> dict[str, Any]:
         provider = self._ai_provider()
+        self._emit_progress("researching_web", {"message": "正在检索持仓风险证据", "total_positions": len(risk_rows)})
         cache_key = _portfolio_overlay_cache_key(risk_rows)
         metrics = _portfolio_overlay_metrics(
             positions=positions,
             risk_rows=risk_rows,
-            advice=advice,
             alerts=alerts,
             total=total,
-            ai_weight=ai_weight,
             top3_weight=top3_weight,
             downside_breadth=downside_breadth,
-            external_context=external_context,
         )
         if provider.name != "mock" and not refresh_ai:
             overlay = self._ai_narrative_service.cached_portfolio_overlay_or_unavailable(
@@ -604,24 +565,16 @@ class PortfolioAnalysisService:
             cache_key=cache_key,
             force=refresh_ai,
         )
-        self._persist_portfolio_ai_overlay(provider=provider, cache_key=cache_key, overlay=overlay)
+        if overlay.get("status") == AnalysisStatus.READY.value:
+            self._emit_progress("persisting", {"message": "正在校验并保存分析结果"})
+            persisted = self._persist_portfolio_ai_overlay(provider=provider, cache_key=cache_key, overlay=overlay)
+            if not persisted:
+                overlay = self._ai_narrative_service.mark_portfolio_overlay_failed(
+                    provider=provider,
+                    cache_key=cache_key,
+                    reason="portfolio_overlay_persistence_failed",
+                )
         return _portfolio_overlay_with_local_fallback(provider=provider, metrics=metrics, overlay=overlay)
-
-    def _refresh_portfolio_ai_overlay(self, provider: Any, metrics: dict[str, Any], cache_key: str) -> None:
-        try:
-            overlay = self._ai_narrative_service.generate_portfolio_overlay(
-                provider=provider,
-                metrics=metrics,
-                cache_key=cache_key,
-                force=True,
-            )
-            self._persist_portfolio_ai_overlay(provider=provider, cache_key=cache_key, overlay=overlay)
-        except Exception as exc:
-            self._ai_narrative_service.mark_portfolio_overlay_failed(
-                provider=provider,
-                cache_key=cache_key,
-                reason=f"structured_ai_overlay_background_failed: {exc}",
-            )
 
     def _load_persisted_portfolio_ai_overlay(self, *, provider: Any, cache_key: str) -> dict[str, Any] | None:
         if self._raw_repository is None or not hasattr(self._raw_repository, "es"):
@@ -633,20 +586,30 @@ class PortfolioAnalysisService:
             )["_source"]
         except Exception:
             return None
-        overlay = source.get("overlay") if isinstance(source, dict) else None
+        overlay = None
+        if isinstance(source, dict):
+            overlay_json = source.get("overlay_json")
+            if isinstance(overlay_json, str):
+                try:
+                    parsed = json.loads(overlay_json)
+                    overlay = parsed if isinstance(parsed, dict) else None
+                except (TypeError, ValueError):
+                    overlay = None
+            if overlay is None:
+                overlay = source.get("overlay")
         if not isinstance(overlay, dict) or overlay.get("status") != AnalysisStatus.READY.value:
             return None
         return dict(overlay)
 
-    def _persist_portfolio_ai_overlay(self, *, provider: Any, cache_key: str, overlay: dict[str, Any]) -> None:
+    def _persist_portfolio_ai_overlay(self, *, provider: Any, cache_key: str, overlay: dict[str, Any]) -> bool:
+        if self._raw_repository is None or not hasattr(self._raw_repository, "es"):
+            return True
         if (
-            self._raw_repository is None
-            or not hasattr(self._raw_repository, "es")
-            or not isinstance(overlay, dict)
+            not isinstance(overlay, dict)
             or overlay.get("status") != AnalysisStatus.READY.value
             or overlay.get("provider") != getattr(provider, "name", None)
         ):
-            return
+            return False
         try:
             self._raw_repository.es.update(
                 index=PORTFOLIO_AI_CACHE_INDEX,
@@ -656,12 +619,15 @@ class PortfolioAnalysisService:
                     "cache_key": cache_key,
                     "cache_date": date.today().isoformat(),
                     "updated_at": _now_iso(),
-                    "overlay": dict(overlay),
+                    # Store the schema-evolving model payload as JSON so legacy
+                    # Elasticsearch dynamic mappings cannot reject newer nested fields.
+                    "overlay_json": json.dumps(overlay, ensure_ascii=False),
                 },
                 doc_as_upsert=True,
             )
         except Exception:
-            return
+            return False
+        return True
 
     def _portfolio_risk_charts(self, positions: list[dict], total: float) -> list[EChartsPayload]:
         return [_weight_change_scatter_chart(positions, total)]
@@ -887,7 +853,13 @@ class PortfolioAnalysisService:
             minimax_base_url=settings.minimax_base_url,
             deepseek_api_key=settings.deepseek_api_key,
             deepseek_base_url=settings.deepseek_base_url,
+            tavily_api_key=settings.tavily_api_key,
+            progress_callback=self._progress_callback,
         )
+
+    def _emit_progress(self, stage: str, details: dict[str, Any] | None = None) -> None:
+        if self._progress_callback is not None:
+            self._progress_callback(stage, details or {})
 
     def _resolve_stock_symbol(self, symbol: str | None) -> str | None:
         normalized_symbol = symbol.upper() if symbol else None
@@ -922,6 +894,17 @@ def _metric(
 
 def _position_value(position: dict) -> float:
     return _to_float(position.get("market_value_snapshot", position.get("position_value", 0)))
+
+
+def _position_key(position: dict) -> str:
+    asset = str(position.get("asset_category") or "STK").upper()
+    symbol = str(position.get("symbol") or "").upper()
+    if asset in {"OPT", "FOP"} or position.get("expiry") or position.get("put_call"):
+        expiry = str(position.get("expiry") or "-")
+        strike = str(position.get("strike") or "-")
+        put_call = str(position.get("put_call") or "-").upper()
+        return f"{asset}:{symbol}:{expiry}:{strike}:{put_call}"
+    return f"{asset}:{symbol}"
 
 
 def _positions_total(positions: list[dict]) -> float:
@@ -1206,7 +1189,6 @@ def _portfolio_risk_rows(
     positions: list[dict],
     total: float,
     *,
-    external_context: dict[str, Any],
     display_currency: str,
 ) -> list[PortfolioRiskRow]:
     rows = sorted(positions, key=lambda row: abs(_position_value(row)), reverse=True)
@@ -1214,7 +1196,6 @@ def _portfolio_risk_rows(
         _portfolio_risk_row(
             position,
             total,
-            external_context=external_context,
             display_currency=display_currency,
         )
         for position in rows
@@ -1226,7 +1207,6 @@ def _portfolio_risk_row(
     position: dict,
     total: float,
     *,
-    external_context: dict[str, Any],
     display_currency: str,
 ) -> PortfolioRiskRow:
     symbol = str(position.get("symbol", "") or "").upper()
@@ -1234,37 +1214,35 @@ def _portfolio_risk_row(
     daily_change_pct = _to_float(position.get("daily_change_pct")) * 100
     unrealized = _optional_float(position.get("unrealized_pnl_snapshot"))
     current_price = _optional_float(position.get("mark_price_snapshot"))
-    relevance, relevance_score = _ai_relevance(position, external_context)
-    logic_status = _logic_status(position, weight_pct=weight_pct, relevance_score=relevance_score)
+    logic_status = _logic_status(position, weight_pct=weight_pct)
     recommendation = _risk_recommendation(
         position,
         weight_pct=weight_pct,
-        relevance_score=relevance_score,
         logic_status=logic_status,
     )
-    evidence = _risk_evidence(
-        position,
-        weight_pct=weight_pct,
-        daily_change_pct=daily_change_pct,
-        unrealized=unrealized,
-        display_currency=display_currency,
-        external_context=external_context,
-    )
-    confidence = _risk_row_confidence(relevance_score, external_context, symbol)
     return PortfolioRiskRow(
+        position_key=_position_key(position),
         symbol=symbol,
         current_price=None if current_price is None else round(current_price, 2),
         weight_pct=weight_pct,
         unrealized_pnl=None if unrealized is None else round(unrealized, 2),
-        ai_relevance=relevance,
         logic_status=logic_status,
         recommendation=recommendation,
-        evidence=evidence,
+        risk_points=_local_risk_points(
+            symbol=symbol,
+            weight_pct=weight_pct,
+            daily_change_pct=daily_change_pct,
+            unrealized=unrealized,
+            display_currency=display_currency,
+        ),
+        tracking_points=_local_tracking_points(symbol=symbol, weight_pct=weight_pct),
+        sources=[],
+        research_status="missing",
         status=AnalysisStatus.READY,
-        confidence=confidence,
-        source=_risk_row_source(external_context, symbol),
+        confidence=0.5,
+        source="portfolio_positions+portfolio_risk_rules",
         as_of=str(position.get("report_date") or date.today().isoformat()),
-        reason="portfolio_risk_check_from_ibkr_positions_external_context_and_ai_rules",
+        reason="local_rules_without_live_research",
     )
 
 
@@ -1283,20 +1261,13 @@ def _ai_relevance(position: dict, external_context: dict[str, Any]) -> tuple[str
     return ("无", 0.05)
 
 
-def _logic_status(position: dict, *, weight_pct: float, relevance_score: float) -> str:
-    symbol = str(position.get("symbol", "") or "").upper()
+def _logic_status(position: dict, *, weight_pct: float) -> str:
     daily_change_pct = _to_float(position.get("daily_change_pct")) * 100
     unrealized = _to_float(position.get("unrealized_pnl_snapshot"))
     if daily_change_pct <= -5:
         return "今日明显承压，需区分市场拖累和基本面变化"
-    if weight_pct >= 15 and relevance_score >= 0.6:
-        return "逻辑相关性强，但仓位对主题波动较敏感"
-    if relevance_score >= 0.85:
-        return "强，直接处于AI基础设施链条"
-    if relevance_score >= 0.6 and unrealized < 0:
-        return "主题相关但未验证盈利，需要重新确认买入逻辑"
-    if symbol in CYCLICAL_HINTS and relevance_score < 0.6:
-        return "独立叙事，与AI资本开支相关性有限"
+    if weight_pct >= 15:
+        return "单票权重较高，持仓逻辑需要更强证据支撑"
     if unrealized < 0:
         return "持续亏损，逻辑需重新审视"
     return "持仓逻辑未触发异常，继续跟踪关键证据"
@@ -1306,139 +1277,111 @@ def _risk_recommendation(
     position: dict,
     *,
     weight_pct: float,
-    relevance_score: float,
     logic_status: str,
 ) -> str:
     daily_change_pct = _to_float(position.get("daily_change_pct")) * 100
-    if weight_pct >= 18 and relevance_score >= 0.6:
-        return "持有但限制继续加仓，等待基本面或外部证据确认"
-    if daily_change_pct <= -5 and relevance_score >= 0.6:
+    if weight_pct >= 18:
+        return "先复核集中度和最新基本面证据，不扩大风险暴露"
+    if daily_change_pct <= -5:
         return "维持观察，今日下跌后优先核实是否只是市场拖累"
     if "重新确认" in logic_status or "持续亏损" in logic_status:
         return "暂不加仓，确认逻辑仍成立后再评估"
-    if relevance_score >= 0.85 and weight_pct < 10:
-        return "可小幅增持，但只在回调或右侧确认时执行"
-    if relevance_score <= 0.1:
-        return "持有或独立跟踪，不纳入AI主题调仓依据"
-    return "持有，跟踪催化剂和主题拥挤度"
+    return "维持观察，持续跟踪财务、竞争和估值证据"
 
 
-def _risk_evidence(
-    position: dict,
+def _local_risk_points(
     *,
+    symbol: str,
     weight_pct: float,
     daily_change_pct: float,
     unrealized: float | None,
     display_currency: str,
-    external_context: dict[str, Any],
-) -> list[str]:
-    symbol = str(position.get("symbol", "") or "").upper()
-    evidence = [
-        f"组合权重 {round(weight_pct, 2)}%",
-        f"当日涨跌 {round(daily_change_pct, 2)}%",
+) -> list[dict[str, Any]]:
+    concentration = "high" if weight_pct >= 18 else "medium" if weight_pct >= 10 else "low"
+    pnl_detail = "未实现盈亏数据缺失" if unrealized is None else f"未实现盈亏约 {display_currency} {round(unrealized, 2)}"
+    return [
+        {
+            "severity": concentration,
+            "title": "单票集中度",
+            "detail": f"{symbol} 组合权重约 {weight_pct}%，权重越高越需要持续验证持仓逻辑。",
+            "evidence_ids": [],
+        },
+        {
+            "severity": "medium" if daily_change_pct <= -5 or (unrealized or 0) < 0 else "low",
+            "title": "价格与盈亏压力",
+            "detail": f"当日涨跌约 {round(daily_change_pct, 2)}%；{pnl_detail}。价格变化不能替代基本面判断。",
+            "evidence_ids": [],
+        },
+        {
+            "severity": "medium",
+            "title": "实时证据缺口",
+            "detail": "本地规则尚未完成联网研究，财报、公告、估值和竞争变化需要模型检索后确认。",
+            "evidence_ids": [],
+        },
     ]
-    if unrealized is not None:
-        evidence.append(f"未实现盈亏 {display_currency} {round(unrealized, 2)}")
-    industry = str(position.get("industry") or "").strip()
-    if industry:
-        evidence.append(f"行业/主题：{industry}")
-    sentiment = (external_context.get("sentiments") or {}).get(symbol, {})
-    if isinstance(sentiment, dict) and sentiment.get("status") == "ready":
-        evidence.append(f"外部热度 {sentiment.get('source', 'external')}={sentiment.get('value')}")
-    valuation = (external_context.get("valuation") or {}).get(symbol)
-    if isinstance(valuation, dict):
-        percentile = _valuation_percentile(valuation)
-        if percentile is not None:
-            evidence.append(f"长桥估值位置约 {round(percentile, 2)}%")
-    return evidence[:6]
 
 
-def _risk_row_confidence(relevance_score: float, external_context: dict[str, Any], symbol: str) -> float:
-    confidence = 0.48 + min(relevance_score, 0.9) * 0.22
-    sentiment = (external_context.get("sentiments") or {}).get(symbol, {})
-    if isinstance(sentiment, dict) and sentiment.get("status") == "ready":
-        confidence += 0.08
-    if symbol in (external_context.get("valuation") or {}):
-        confidence += 0.06
-    return round(min(confidence, 0.84), 2)
-
-
-def _risk_row_source(external_context: dict[str, Any], symbol: str) -> str:
-    sources = ["portfolio_positions", "portfolio_ai_rules"]
-    sentiment = (external_context.get("sentiments") or {}).get(symbol, {})
-    if isinstance(sentiment, dict) and sentiment.get("status") == "ready":
-        sources.append(str(sentiment.get("source") or "external_sentiment"))
-    if symbol in (external_context.get("valuation") or {}):
-        sources.append("longbridge_valuation_rank")
-    return "+".join(sources)
+def _local_tracking_points(*, symbol: str, weight_pct: float) -> list[dict[str, Any]]:
+    return [
+        {
+            "item": f"{symbol} 最新财报与公司指引",
+            "why": "收入、利润率和指引决定持仓逻辑是否仍被经营证据支持。",
+            "trigger": "指引下调、利润率恶化或关键业务增长明显放缓。",
+            "horizon": "quarterly",
+            "evidence_ids": [],
+        },
+        {
+            "item": "行业竞争与政策变化",
+            "why": "竞争格局和政策可能改变盈利能力与估值中枢。",
+            "trigger": "主要竞争对手提速、价格压力扩大或监管约束升级。",
+            "horizon": "30d",
+            "evidence_ids": [],
+        },
+        {
+            "item": "组合集中度",
+            "why": f"当前权重约 {weight_pct}%，需要与证据强度匹配。",
+            "trigger": "权重继续上升但没有新增基本面证据。",
+            "horizon": "7d",
+            "evidence_ids": [],
+        },
+    ]
 
 
 def _portfolio_rebalance_advice(
     *,
-    positions: list[dict],
     risk_rows: list[PortfolioRiskRow],
     alerts: list[dict[str, Any]],
-    total: float,
-    ai_weight: float,
     top3_weight: float,
     downside_breadth: float,
-    external_context: dict[str, Any],
 ) -> PortfolioRebalanceAdvice:
-    high_relevance = [row for row in risk_rows if row.ai_relevance.startswith("极高")]
-    pullback_candidates = [
-        row for row in high_relevance
-        if row.weight_pct < 12 and row.unrealized_pnl is not None and row.unrealized_pnl >= 0
-    ]
-    crowded = [
-        row for row in risk_rows
-        if row.weight_pct >= 12 or row.ai_relevance.startswith("极高")
-    ][:4]
+    crowded = [row for row in risk_rows if row.weight_pct >= 12][:4]
     weak = [
         row for row in risk_rows
         if "重新确认" in row.logic_status or (row.unrealized_pnl is not None and row.unrealized_pnl < 0)
     ][:4]
-    best_direction = _best_research_direction(positions, high_relevance, ai_weight)
-    undervalued = "；".join(f"{row.symbol}（{row.logic_status}）" for row in pullback_candidates[:3]) or "暂无明确低估信号，等待外部证据确认"
-    crowded_text = "；".join(f"{row.symbol}（权重 {row.weight_pct}%）" for row in crowded[:3]) or "暂无明显拥挤持仓"
-    catalysts = "财报指引、云厂商资本开支、AI服务器/HBM/光模块订单与价格信号"
-    data_90d = "未来90天重点看收入指引、毛利率、库存、交期和资本开支是否继续验证"
+    top = risk_rows[0] if risk_rows else None
+    first_risk = f"{top.symbol} 权重约 {top.weight_pct}%，优先核实集中度与逻辑证据。" if top else "暂无持仓风险。"
+    review = "、".join(row.symbol for row in weak[:3]) or "暂无单独需要优先复核的持仓"
+    structure = f"前三大持仓合计约 {round(top3_weight * 100, 2)}%，先控制集中度和相关性风险。"
+    tracking = "未来30天逐项跟踪财报、公司指引、竞争格局、政策和估值变化。"
     action_today = _today_action(risk_rows, alerts, downside_breadth)
     thinking_prompt = _thinking_prompt(weak, crowded)
-    market_note = _market_note(ai_weight, top3_weight, downside_breadth)
-    confidence = _rebalance_confidence(external_context, bool(risk_rows))
-    source = "portfolio_positions+external_research+portfolio_ai_rules" if _has_external_ready(external_context) else "portfolio_positions+portfolio_ai_rules"
     cards = [
-        {"rank": "01", "icon": "compass", "title": "现在最值得研究的方向", "body": best_direction},
-        {"rank": "02", "icon": "search", "title": "最可能被低估的标的", "body": undervalued},
-        {"rank": "03", "icon": "alert", "title": "最拥挤/最需要小心", "body": crowded_text},
-        {"rank": "04", "icon": "calendar", "title": "未来30天需要盯的催化剂", "body": catalysts},
+        {"rank": "01", "icon": "alert", "title": "组合首要风险", "body": first_risk},
+        {"rank": "02", "icon": "search", "title": "优先复核持仓", "body": review},
+        {"rank": "03", "icon": "compass", "title": "组合结构与集中度", "body": structure},
+        {"rank": "04", "icon": "calendar", "title": "未来30天跟踪清单", "body": tracking},
     ]
     return PortfolioRebalanceAdvice(
         cards=cards,
         action_today=action_today,
         thinking_prompt=thinking_prompt,
-        market_note=market_note,
-        research_direction=best_direction,
-        undervalued_symbols=undervalued,
-        crowded_symbols=crowded_text,
-        catalysts_30d=catalysts,
-        data_90d=data_90d,
-        optimal_structure="维持核心已验证持仓，避免在高权重同主题上继续叠加；新增仓位只用小仓位观察或等待右侧确认",
-        invalidation="若核心持仓财报/订单/价格/毛利率证据转弱，或AI资本开支预期降温，需要承认主题判断失效并降低相关暴露",
         status=AnalysisStatus.READY if risk_rows else AnalysisStatus.MISSING_DATA,
-        source=source,
+        source="portfolio_positions+portfolio_risk_rules",
         as_of=date.today().isoformat(),
-        confidence=confidence,
-        reason="trader_style_conclusion_from_ibkr_positions_external_context_and_ai_rules",
+        confidence=0.5 if risk_rows else 0.0,
+        reason="local_portfolio_risk_rules_without_live_research",
     )
-
-
-def _best_research_direction(positions: list[dict], high_relevance: list[PortfolioRiskRow], ai_weight: float) -> str:
-    symbols = "、".join(row.symbol for row in high_relevance[:4])
-    if ai_weight >= 0.35 and symbols:
-        return f"AI基础设施链条（{symbols}），重点验证需求、毛利率和供给约束是否继续成立"
-    top = _largest_position_symbol(positions) or "最大持仓"
-    return f"围绕{top}的核心持仓逻辑做验证，暂不把所有持仓都归入AI主题"
 
 
 def _today_action(risk_rows: list[PortfolioRiskRow], alerts: list[dict[str, Any]], downside_breadth: float) -> str:
@@ -1464,50 +1407,26 @@ def _thinking_prompt(weak: list[PortfolioRiskRow], crowded: list[PortfolioRiskRo
     return "当前组合没有单一必须重审的问题，继续按证据而非情绪调整。"
 
 
-def _market_note(ai_weight: float, top3_weight: float, downside_breadth: float) -> str:
-    return (
-        f"当前AI/半导体主题权重约 {round(ai_weight * 100, 2)}%，"
-        f"前三大权重约 {round(top3_weight * 100, 2)}%，"
-        f"下跌广度约 {round(downside_breadth * 100, 2)}%。调仓应先处理集中度，再讨论新增方向。"
-    )
-
-
-def _rebalance_confidence(external_context: dict[str, Any], has_rows: bool) -> float:
-    if not has_rows:
-        return 0.0
-    confidence = 0.58
-    if _has_external_ready(external_context):
-        confidence += 0.12
-    missing_count = len(external_context.get("missing") or [])
-    if missing_count >= 6:
-        confidence -= 0.08
-    return round(max(0.35, min(confidence, 0.78)), 2)
-
-
-def _has_external_ready(external_context: dict[str, Any]) -> bool:
-    sentiments = external_context.get("sentiments") or {}
-    if any(isinstance(row, dict) and row.get("status") == "ready" for row in sentiments.values()):
-        return True
-    return bool(external_context.get("valuation"))
-
-
 def _portfolio_analysis_meta(
     *,
     rows: list[PortfolioRiskRow],
     advice: PortfolioRebalanceAdvice,
-    external_context: dict[str, Any],
     ai_overlay: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     overlay = ai_overlay if isinstance(ai_overlay, dict) else {}
+    researched = [row for row in rows if row.research_status == "ready" and row.sources]
+    missing = [row.position_key for row in rows if row.research_status != "ready" or not row.sources]
     return {
         "status": advice.status.value,
         "source": advice.source,
         "confidence": advice.confidence,
         "as_of": advice.as_of,
         "risk_row_count": len(rows),
-        "external_provider": external_context.get("provider"),
-        "external_ready": _has_external_ready(external_context),
-        "missing_reasons": list(dict.fromkeys(external_context.get("missing") or []))[:8],
+        "external_provider": "tavily" if researched else None,
+        "external_ready": bool(rows) and len(researched) == len(rows),
+        "researched_position_count": len(researched),
+        "research_source_count": sum(len(row.sources) for row in researched),
+        "missing_reasons": [f"{key}:research_missing" for key in missing[:8]],
         "ai_overlay_status": overlay.get("status") or AnalysisStatus.UNAVAILABLE.value,
         "ai_overlay_provider": overlay.get("provider"),
         "ai_overlay_model": overlay.get("model"),
@@ -1519,37 +1438,26 @@ def _portfolio_overlay_metrics(
     *,
     positions: list[dict],
     risk_rows: list[PortfolioRiskRow],
-    advice: PortfolioRebalanceAdvice,
     alerts: list[dict[str, Any]],
     total: float,
-    ai_weight: float,
     top3_weight: float,
     downside_breadth: float,
-    external_context: dict[str, Any],
 ) -> dict[str, Any]:
-    positions_by_symbol = {str(row.get("symbol", "") or "").upper(): row for row in positions}
-    ranked_rows = sorted(
-        risk_rows,
-        key=lambda row: (abs(row.weight_pct), abs(row.unrealized_pnl or 0.0)),
-        reverse=True,
-    )
-    selected_rows = ranked_rows[:8]
-    selected_symbols = {row.symbol for row in selected_rows}
+    positions_by_key = {_position_key(row): row for row in positions}
     return {
         "portfolio": {
             "total_market_value": round(total, 2),
             "position_count": len(risk_rows),
-            "analyzed_position_count": len(selected_rows),
-            "omitted_symbols": [row.symbol for row in ranked_rows if row.symbol not in selected_symbols][:20],
-            "ai_theme_weight_pct": round(ai_weight * 100, 2),
             "top3_weight_pct": round(top3_weight * 100, 2),
             "downside_breadth_pct": round(downside_breadth * 100, 2),
+            "display_currency": next((str(row.get("display_currency")) for row in positions if row.get("display_currency")), "USD"),
+            "as_of": max((str(row.get("report_date") or "") for row in positions), default=""),
         },
-        "risk_rows": [
-            _risk_row_for_overlay(row, positions_by_symbol.get(row.symbol, {}))
-            for row in selected_rows
+        "positions": [
+            _risk_row_for_overlay(row, positions_by_key.get(row.position_key, {}))
+            for row in risk_rows
         ],
-        "alerts": [
+        "portfolio_alerts": [
             {
                 "severity": alert.get("severity"),
                 "title": alert.get("title"),
@@ -1558,15 +1466,10 @@ def _portfolio_overlay_metrics(
             for alert in alerts[:8]
             if isinstance(alert, dict)
         ],
-        "local_rule_context": {
-            "rule_advice_status": advice.status.value,
-            "rule_confidence": advice.confidence,
-            "note": "local rules were used only to prepare features; do not copy local wording",
-        },
-        "external_context": _portfolio_external_context_for_overlay(external_context),
         "policy": {
             "read_only": True,
             "no_order_quantity": True,
+            "require_live_sources": True,
             "do_not_invent_missing_facts": True,
         },
     }
@@ -1574,84 +1477,34 @@ def _portfolio_overlay_metrics(
 
 def _risk_row_for_overlay(row: PortfolioRiskRow, position: dict) -> dict[str, Any]:
     return {
+        "position_key": row.position_key,
         "symbol": row.symbol,
+        "asset_category": str(position.get("asset_category") or "STK").upper(),
+        "expiry": position.get("expiry") or None,
+        "strike": _optional_float(position.get("strike")) if position else None,
+        "put_call": str(position.get("put_call") or "").upper() or None,
         "current_price": row.current_price,
         "weight_pct": row.weight_pct,
         "unrealized_pnl": row.unrealized_pnl,
-        "avg_cost": _optional_float(
+        "average_cost": _optional_float(
             position.get("average_cost_price")
             or position.get("cost_basis_price")
             or position.get("cost_price_moving_weighted")
             or position.get("cost_price_adjusted")
         ) if position else None,
-        "position_qty": _optional_float(position.get("quantity")) if position else None,
+        "quantity": _optional_float(position.get("quantity")) if position else None,
         "daily_change_pct": round(_position_daily_change_pct(position) * 100, 2) if position else None,
         "industry": str(position.get("industry") or "") if position else "",
         "market_value": round(abs(_position_value(position)), 2) if position else None,
-        "news_summary": _external_summary_for_symbol(row.symbol, "news", position),
-        "earnings_summary": _external_summary_for_symbol(row.symbol, "earnings", position),
-        "technical_summary": _technical_summary_for_overlay(position),
-        "sentiment_summary": _external_summary_for_symbol(row.symbol, "sentiment", position),
-        "source_evidence": row.evidence[:6],
-        "local_rule_confidence": row.confidence,
     }
-
-
-def _portfolio_external_context_for_overlay(external_context: dict[str, Any]) -> dict[str, Any]:
-    sentiments = external_context.get("sentiments") if isinstance(external_context, dict) else {}
-    valuation = external_context.get("valuation") if isinstance(external_context, dict) else {}
-    return {
-        "provider": external_context.get("provider") if isinstance(external_context, dict) else None,
-        "missing": list(dict.fromkeys(external_context.get("missing") or []))[:12] if isinstance(external_context, dict) else [],
-        "sentiments": {
-            symbol: _compact_external_signal(signal)
-            for symbol, signal in (sentiments or {}).items()
-            if isinstance(signal, dict)
-        },
-        "valuation": {
-            symbol: _compact_external_signal(signal)
-            for symbol, signal in (valuation or {}).items()
-            if isinstance(signal, dict)
-        },
-    }
-
-
-def _compact_external_signal(signal: dict[str, Any]) -> dict[str, Any]:
-    compact: dict[str, Any] = {}
-    for key in ("status", "source", "value", "score", "label", "reason", "as_of", "pe_percentile", "pb_percentile", "ps_percentile"):
-        if signal.get(key) not in (None, "", []):
-            compact[key] = signal.get(key)
-    percentile = _valuation_percentile(signal)
-    if percentile is not None:
-        compact["valuation_percentile"] = percentile
-    return compact
-
-
-def _external_summary_for_symbol(symbol: str, kind: str, position: dict) -> str | None:
-    if not position:
-        return None
-    if kind == "sentiment":
-        return None
-    return None
-
-
-def _technical_summary_for_overlay(position: dict) -> str | None:
-    if not position:
-        return None
-    daily_change_pct = round(_position_daily_change_pct(position) * 100, 2)
-    if daily_change_pct <= -5:
-        return f"当日跌幅 {daily_change_pct}%，短线承压；未接入更完整技术指标。"
-    if daily_change_pct >= 5:
-        return f"当日涨幅 {daily_change_pct}%，短线偏强；未接入更完整技术指标。"
-    return "未接入完整技术指标，仅有当日涨跌。"
 
 
 def _portfolio_overlay_cache_key(risk_rows: list[PortfolioRiskRow]) -> str:
     chunks = [
-        f"{row.symbol}:{round(row.weight_pct, 2)}:{round(row.unrealized_pnl or 0, 2)}"
-        for row in risk_rows[:30]
+        f"{row.position_key}:{round(row.weight_pct, 2)}:{round(row.unrealized_pnl or 0, 2)}"
+        for row in risk_rows
     ]
-    return f"v3:single_position_prompt:{'|'.join(chunks) or 'empty'}"
+    return f"v4:deepseek_tavily_full_portfolio:{'|'.join(chunks) or 'empty'}"
 
 
 def _portfolio_overlay_cache_doc_id(*, provider: Any, cache_key: str) -> str:
@@ -1718,17 +1571,27 @@ def _apply_portfolio_ai_overlay(
     if not isinstance(overlay, dict) or overlay.get("status") != AnalysisStatus.READY.value:
         return risk_rows, advice
     provider = str(overlay.get("provider") or "structured_ai")
-    source_prefix = f"{provider}_structured_ai"
-    overlay_rows = {
-        str(row.get("symbol") or "").upper(): row
-        for row in overlay.get("risk_rows", []) or []
-        if isinstance(row, dict) and row.get("symbol")
-    }
-    merged_rows = [
-        _merge_portfolio_risk_overlay(row, overlay_rows.get(row.symbol), source_prefix=source_prefix)
-        for row in risk_rows
-    ]
-    merged_advice = _merge_rebalance_advice_overlay(advice, overlay.get("rebalance_advice"), source_prefix=source_prefix)
+    source_prefix = "deepseek_tavily_web_research" if provider == "deepseek" else f"{provider}_structured_ai"
+    raw_rows = overlay.get("risk_rows")
+    if not isinstance(raw_rows, list):
+        return risk_rows, advice
+    keys = [str(row.get("position_key") or "") for row in raw_rows if isinstance(row, dict)]
+    expected = [row.position_key for row in risk_rows]
+    if len(keys) != len(raw_rows) or len(set(keys)) != len(keys) or set(keys) != set(expected):
+        return risk_rows, advice
+    overlay_rows = {str(row["position_key"]): row for row in raw_rows if isinstance(row, dict)}
+    try:
+        merged_rows = [
+            _merge_portfolio_risk_overlay(row, overlay_rows[row.position_key], source_prefix=source_prefix)
+            for row in risk_rows
+        ]
+        merged_advice = _merge_rebalance_advice_overlay(
+            advice,
+            overlay.get("rebalance_advice"),
+            source_prefix=source_prefix,
+        )
+    except (TypeError, ValueError):
+        return risk_rows, advice
     return merged_rows, merged_advice
 
 
@@ -1741,70 +1604,27 @@ def _merge_portfolio_risk_overlay(
     if not isinstance(overlay_row, dict):
         return row
     data = row.model_dump(mode="json")
-    relevance = _clean_overlay_text(overlay_row.get("ai_relevance"))
-    relevance_reason = _clean_overlay_text(overlay_row.get("ai_relevance_reason"))
-    if relevance:
-        data["ai_relevance"] = _format_ai_relevance(relevance, relevance_reason)
-    if relevance_reason:
-        data["ai_relevance_reason"] = relevance_reason
     logic_status = _clean_overlay_text(overlay_row.get("logic_status"))
-    if logic_status:
-        data["logic_status"] = logic_status
-    suggestion = _clean_overlay_text(overlay_row.get("suggestion")) or _clean_overlay_text(overlay_row.get("recommendation"))
-    if suggestion:
-        data["recommendation"] = suggestion
-    risk_points = _clean_overlay_list(overlay_row.get("risk_points"))
-    tracking_points = _clean_overlay_list(overlay_row.get("tracking_points"))
-    if risk_points:
-        data["risk_points"] = risk_points[:4]
-    if tracking_points:
-        data["tracking_points"] = tracking_points[:4]
-    position_role = _clean_overlay_text(overlay_row.get("position_role"))
-    if position_role:
-        data["position_role"] = position_role
-    evidence = _clean_overlay_list(overlay_row.get("evidence"))
-    derived_evidence = _risk_overlay_evidence(
-        ai_relevance_reason=relevance_reason,
-        risk_points=risk_points,
-        tracking_points=tracking_points,
-        position_role=position_role,
-    )
-    if evidence or derived_evidence:
-        data["evidence"] = (derived_evidence + evidence)[:6]
+    recommendation = _clean_overlay_text(overlay_row.get("recommendation"))
+    if not logic_status or not recommendation:
+        raise ValueError("portfolio overlay text fields are missing")
+    data["logic_status"] = logic_status
+    data["recommendation"] = recommendation
+    data["risk_points"] = overlay_row.get("risk_points")
+    data["tracking_points"] = overlay_row.get("tracking_points")
+    data["sources"] = overlay_row.get("sources")
+    research_status = str(overlay_row.get("research_status") or "missing")
+    data["research_status"] = research_status if research_status in {"ready", "missing"} else "missing"
     confidence = _bounded_confidence(overlay_row.get("confidence"), fallback=row.confidence)
     data["confidence"] = confidence
-    data["source"] = _prepend_source(source_prefix, row.source)
-    data["reason"] = "portfolio_risk_check_structured_ai_overlay"
+    data["source"] = source_prefix
+    data["reason"] = (
+        "portfolio_risk_research_with_verified_sources"
+        if data["research_status"] == "ready"
+        else "local_rules_without_live_research"
+    )
     data["status"] = AnalysisStatus.READY.value
     return PortfolioRiskRow(**data)
-
-
-def _format_ai_relevance(relevance: str, reason: str | None) -> str:
-    normalized = relevance.strip()
-    if not reason or "（" in normalized or "(" in normalized:
-        return normalized
-    if normalized == "无":
-        return "无"
-    return f"{normalized}（{reason}）"
-
-
-def _risk_overlay_evidence(
-    *,
-    ai_relevance_reason: str | None,
-    risk_points: list[str],
-    tracking_points: list[str],
-    position_role: str | None,
-) -> list[str]:
-    evidence: list[str] = []
-    if position_role:
-        evidence.append(f"仓位角色：{position_role}")
-    if ai_relevance_reason and ai_relevance_reason != "无":
-        evidence.append(f"AI关联原因：{ai_relevance_reason}")
-    if risk_points:
-        evidence.append(f"风险：{risk_points[0]}")
-    if tracking_points:
-        evidence.append(f"跟踪：{tracking_points[0]}")
-    return evidence
 
 
 def _merge_rebalance_advice_overlay(
@@ -1814,31 +1634,22 @@ def _merge_rebalance_advice_overlay(
     source_prefix: str,
 ) -> PortfolioRebalanceAdvice:
     if not isinstance(overlay_advice, dict):
-        return advice
-    data = advice.model_dump(mode="json")
+        raise ValueError("rebalance advice is missing")
     cards = _clean_advice_cards(overlay_advice.get("cards"))
-    if cards:
-        data["cards"] = cards[:4]
-    for key in (
-        "action_today",
-        "thinking_prompt",
-        "market_note",
-        "research_direction",
-        "undervalued_symbols",
-        "crowded_symbols",
-        "catalysts_30d",
-        "data_90d",
-        "optimal_structure",
-        "invalidation",
-    ):
-        value = _clean_overlay_text(overlay_advice.get(key))
-        if value:
-            data[key] = value
-    data["confidence"] = _bounded_confidence(overlay_advice.get("confidence"), fallback=advice.confidence)
-    data["source"] = _prepend_source(source_prefix, advice.source)
-    data["reason"] = "trader_style_conclusion_structured_ai_overlay"
-    data["status"] = AnalysisStatus.READY.value
-    return PortfolioRebalanceAdvice(**data)
+    action_today = _clean_overlay_text(overlay_advice.get("action_today"))
+    thinking_prompt = _clean_overlay_text(overlay_advice.get("thinking_prompt"))
+    if len(cards) != 4 or not action_today or not thinking_prompt:
+        raise ValueError("rebalance advice is incomplete")
+    return PortfolioRebalanceAdvice(
+        cards=cards,
+        action_today=action_today,
+        thinking_prompt=thinking_prompt,
+        confidence=_bounded_confidence(overlay_advice.get("confidence"), fallback=advice.confidence),
+        source=source_prefix,
+        reason="portfolio_rebalance_research_with_verified_sources",
+        status=AnalysisStatus.READY,
+        as_of=date.today().isoformat(),
+    )
 
 
 def _clean_overlay_text(value: Any) -> str | None:
@@ -1848,32 +1659,26 @@ def _clean_overlay_text(value: Any) -> str | None:
     return text[:500] if text else None
 
 
-def _clean_overlay_list(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [str(item).strip()[:260] for item in value if str(item).strip()]
-    text = _clean_overlay_text(value)
-    return [text] if text else []
-
-
 def _clean_advice_cards(value: Any) -> list[dict[str, str]]:
-    if not isinstance(value, list):
+    if not isinstance(value, list) or len(value) != 4:
         return []
     cards: list[dict[str, str]] = []
-    for index, item in enumerate(value[:4], start=1):
+    expected = [
+        ("01", "alert", "组合首要风险"),
+        ("02", "search", "优先复核持仓"),
+        ("03", "compass", "组合结构与集中度"),
+        ("04", "calendar", "未来30天跟踪清单"),
+    ]
+    for item, (expected_rank, expected_icon, expected_title) in zip(value, expected, strict=False):
         if not isinstance(item, dict):
             continue
-        rank = _clean_overlay_text(item.get("rank")) or f"{index:02d}"
-        icon = _clean_overlay_text(item.get("icon")) or _advice_icon_for_index(index)
-        title = _clean_overlay_text(item.get("title")) or "结论"
-        body = _clean_overlay_text(item.get("body")) or ""
-        if body:
+        rank = _clean_overlay_text(item.get("rank"))
+        icon = _clean_overlay_text(item.get("icon"))
+        title = _clean_overlay_text(item.get("title"))
+        body = _clean_overlay_text(item.get("body"))
+        if (rank, icon, title) == (expected_rank, expected_icon, expected_title) and body:
             cards.append({"rank": rank, "icon": icon, "title": title, "body": body})
     return cards
-
-
-def _advice_icon_for_index(index: int) -> str:
-    icons = {1: "compass", 2: "search", 3: "alert", 4: "calendar"}
-    return icons.get(index, "check")
 
 
 def _bounded_confidence(value: Any, *, fallback: float | None) -> float:
@@ -1883,12 +1688,6 @@ def _bounded_confidence(value: Any, *, fallback: float | None) -> float:
     if parsed > 1:
         parsed = parsed / 100
     return round(max(0.0, min(parsed, 1.0)), 2)
-
-
-def _prepend_source(prefix: str, source: str) -> str:
-    if source.startswith(prefix):
-        return source
-    return f"{prefix}+{source}" if source else prefix
 
 
 def _ai_theme_weight(positions: list[dict], total: float) -> float:

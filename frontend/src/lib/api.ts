@@ -5,6 +5,7 @@ import type {
   OverviewResponse,
   OverviewRiskWarningResponse,
   PortfolioAnalysisResponse,
+  PortfolioRefreshJob,
   RequestQuery,
   SettingsResponse,
   SettingsUpdatePayload,
@@ -74,7 +75,9 @@ export const api = {
   portfolioAnalysis: (query?: RequestQuery) =>
     getJson<PortfolioAnalysisResponse>("/api/portfolio-analysis", query),
   refreshPortfolioAnalysisNarrative: (query?: RequestQuery) =>
-    postJson<Record<string, unknown>>(`/api/portfolio-analysis/narrative/refresh${buildQuery(query)}`, {}),
+    postJson<PortfolioRefreshJob>(`/api/portfolio-analysis/narrative/refresh${buildQuery(query)}`, {}),
+  portfolioAnalysisRefreshJob: (jobId: string) =>
+    getJson<PortfolioRefreshJob>(`/api/portfolio-analysis/narrative/refresh/${encodeURIComponent(jobId)}`),
   positionDetail: (symbol: string) => getJson<Record<string, unknown>>(`/api/positions/${encodeURIComponent(symbol)}/detail`),
   industryAllocation: () => getJson<Record<string, unknown>>("/api/positions/industry-allocation"),
   industryMappings: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/industry-mappings", query),

@@ -27,6 +27,7 @@ interface SettingsForm {
   minimax_base_url: string;
   deepseek_api_key: string;
   deepseek_base_url: string;
+  tavily_api_key: string;
   futu_connection_mode: "disabled" | "local_opend" | "longbridge";
   futu_opend_host: string;
   futu_opend_port: number;
@@ -54,6 +55,7 @@ const defaultForm: SettingsForm = {
   minimax_base_url: "https://api.minimaxi.com/v1",
   deepseek_api_key: "",
   deepseek_base_url: "https://api.deepseek.com",
+  tavily_api_key: "",
   futu_connection_mode: "disabled",
   futu_opend_host: "127.0.0.1",
   futu_opend_port: 11111,
@@ -141,6 +143,7 @@ function settingsToForm(data: SettingsResponse): SettingsForm {
     minimax_base_url: asText(data.minimax_base_url, "https://api.minimaxi.com/v1"),
     deepseek_api_key: asText(data.deepseek_api_key, ""),
     deepseek_base_url: asText(data.deepseek_base_url, "https://api.deepseek.com"),
+    tavily_api_key: asText(data.tavily_api_key, ""),
     futu_connection_mode: data.futu_connection_mode ?? "disabled",
     futu_opend_host: asText(data.futu_opend_host, "127.0.0.1"),
     futu_opend_port: asNumber(data.futu_opend_port, 11111),
@@ -204,6 +207,7 @@ export function SettingsPage() {
         minimax_base_url: form.minimax_base_url,
         deepseek_api_key: form.deepseek_api_key,
         deepseek_base_url: form.deepseek_base_url,
+        tavily_api_key: form.tavily_api_key,
         futu_connection_mode: form.futu_connection_mode,
         futu_opend_host: form.futu_opend_host,
         futu_opend_port: form.futu_opend_port,
@@ -220,6 +224,7 @@ export function SettingsPage() {
       if (hasMaskedValue(form.openai_api_key)) delete payload.openai_api_key;
       if (hasMaskedValue(form.minimax_api_key)) delete payload.minimax_api_key;
       if (hasMaskedValue(form.deepseek_api_key)) delete payload.deepseek_api_key;
+      if (hasMaskedValue(form.tavily_api_key)) delete payload.tavily_api_key;
       if (hasMaskedValue(form.telegram_bot_token)) delete payload.telegram_bot_token;
       await api.saveSettings(payload);
       setMessage("设置已保存");
@@ -437,6 +442,10 @@ export function SettingsPage() {
                       <Field label="DeepSeek Base URL">
                         <input value={form.deepseek_base_url} onChange={(event) => setForm({ ...form, deepseek_base_url: event.target.value })} />
                       </Field>
+                      <Field label="Tavily Search API Key">
+                        <input value={form.tavily_api_key} onChange={(event) => setForm({ ...form, tavily_api_key: event.target.value })} />
+                      </Field>
+                      <small>持仓联网研究由 DeepSeek 发起工具调用，Tavily 只接收证券研究查询。</small>
                     </>
                   ) : null}
                 </div>

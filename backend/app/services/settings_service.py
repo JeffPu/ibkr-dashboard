@@ -25,6 +25,7 @@ class AppSettings:
     minimax_base_url: str = "https://api.minimaxi.com/v1"
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
+    tavily_api_key: str = ""
     futu_connection_mode: str = "disabled"
     futu_opend_host: str = "127.0.0.1"
     futu_opend_port: int = 11111
@@ -77,6 +78,7 @@ class SettingsService:
         minimax_base_url: str | None = None,
         deepseek_api_key: str | None = None,
         deepseek_base_url: str | None = None,
+        tavily_api_key: str | None = None,
         futu_connection_mode: str | None = None,
         futu_opend_host: str | None = None,
         futu_opend_port: int | None = None,
@@ -118,6 +120,8 @@ class SettingsService:
             self._settings.deepseek_api_key = deepseek_api_key
         if deepseek_base_url is not None:
             self._settings.deepseek_base_url = deepseek_base_url
+        if tavily_api_key is not None:
+            self._settings.tavily_api_key = tavily_api_key
         if futu_connection_mode is not None:
             self._settings.futu_connection_mode = futu_connection_mode
         if futu_opend_host is not None:
@@ -170,6 +174,7 @@ class SettingsService:
             "minimax_base_url": self._settings.minimax_base_url,
             "deepseek_api_key": self._settings.deepseek_api_key,
             "deepseek_base_url": self._settings.deepseek_base_url,
+            "tavily_api_key": self._settings.tavily_api_key,
             "futu_connection_mode": self._settings.futu_connection_mode,
             "futu_opend_host": self._settings.futu_opend_host,
             "futu_opend_port": self._settings.futu_opend_port,
@@ -206,6 +211,7 @@ SECRET_FIELDS = {
     "openai_api_key",
     "minimax_api_key",
     "deepseek_api_key",
+    "tavily_api_key",
     "telegram_bot_token",
 }
 ENCRYPTED_SECRET_PREFIX = "enc:v1:"

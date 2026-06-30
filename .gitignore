@@ -71,5 +71,10 @@ backend/.coverage
 docs/
 PRD.md
 
-# Development-only test suite, kept local but not needed by end users
-backend/tests/
+# Keep the full local suite out of release artifacts, but version the regression
+# files that define the portfolio-AI/settings contracts changed by this project.
+backend/tests/*
+!backend/tests/test_portfolio_analysis_contracts.py
+!backend/tests/test_v2_integrations.py
+!backend/tests/test_settings_api.py
+!backend/tests/test_settings_service.py

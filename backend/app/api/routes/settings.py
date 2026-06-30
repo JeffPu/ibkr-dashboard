@@ -64,6 +64,7 @@ class SettingsUpdateRequest(BaseModel):
     minimax_base_url: str | None = None
     deepseek_api_key: str | None = None
     deepseek_base_url: str | None = None
+    tavily_api_key: str | None = None
     futu_connection_mode: str | None = None
     futu_opend_host: str | None = None
     futu_opend_port: int | None = None
@@ -203,6 +204,7 @@ def update_settings(payload: SettingsUpdateRequest) -> dict[str, object]:
         minimax_base_url=payload.minimax_base_url.rstrip("/") if payload.minimax_base_url else payload.minimax_base_url,
         deepseek_api_key=payload.deepseek_api_key,
         deepseek_base_url=payload.deepseek_base_url.rstrip("/") if payload.deepseek_base_url else payload.deepseek_base_url,
+        tavily_api_key=payload.tavily_api_key,
         futu_connection_mode=payload.futu_connection_mode,
         futu_opend_host=payload.futu_opend_host,
         futu_opend_port=payload.futu_opend_port,
@@ -461,6 +463,7 @@ def _settings_response() -> dict[str, object]:
         "minimax_base_url": settings.minimax_base_url,
         "deepseek_api_key": _mask_secret(settings.deepseek_api_key),
         "deepseek_base_url": settings.deepseek_base_url,
+        "tavily_api_key": _mask_secret(settings.tavily_api_key),
         "futu_connection_mode": settings.futu_connection_mode,
         "futu_opend_host": settings.futu_opend_host,
         "futu_opend_port": settings.futu_opend_port,

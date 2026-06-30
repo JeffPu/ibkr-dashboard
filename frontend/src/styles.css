@@ -598,7 +598,9 @@ input[type="file"] {
 }
 
 .portfolio-kpi-card strong {
-  font-size: 20px;
+  font-size: clamp(15px, 1.25vw, 20px);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .portfolio-kpi-card--positive {
@@ -1473,6 +1475,46 @@ input[type="file"] {
   min-width: 0;
 }
 
+.portfolio-risk-details {
+  min-width: 210px;
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.portfolio-risk-details summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.portfolio-risk-details ul {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 4px;
+  padding-left: 18px;
+}
+
+.portfolio-risk-details li {
+  line-height: 1.45;
+}
+
+.portfolio-risk-details li span,
+.portfolio-risk-details li small {
+  display: block;
+  margin-top: 2px;
+}
+
+.portfolio-risk-sources a {
+  color: var(--positive);
+  overflow-wrap: anywhere;
+}
+
+.risk-severity--high { color: var(--negative); }
+.risk-severity--medium { color: var(--accent-2); }
+.risk-severity--low { color: var(--muted); }
+
 .risk-cell-with-evidence small,
 .analysis-meta-line {
   color: var(--muted);
@@ -1494,37 +1536,6 @@ input[type="file"] {
 .analysis-meta-line--ai-fallback span:first-child {
   color: var(--muted);
   font-weight: 800;
-}
-
-.risk-relevance {
-  display: inline-flex;
-  max-width: 180px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1.35;
-  white-space: normal;
-}
-
-.risk-relevance--high {
-  color: #7a231d;
-  background: #f7dfdc;
-}
-
-.risk-relevance--medium {
-  color: #6f5311;
-  background: #f6edcf;
-}
-
-.risk-relevance--low {
-  color: #245b71;
-  background: #dff0f6;
-}
-
-.risk-relevance--none {
-  color: var(--muted);
-  background: #eef0ea;
 }
 
 .portfolio-risk-chart {
@@ -4606,6 +4617,213 @@ input[type="file"] {
   line-height: 1;
 }
 
+.ai-progress-backdrop {
+  z-index: 40;
+}
+
+.ai-progress-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(580px, 100%);
+  max-height: min(760px, calc(100vh - 32px));
+  overflow: hidden;
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(32, 35, 31, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(32, 35, 31, 0.03) 1px, transparent 1px),
+    rgba(251, 252, 247, 0.98);
+  background-size: 28px 28px;
+  box-shadow: 10px 10px 0 rgba(21, 23, 18, 0.16), 0 30px 80px rgba(32, 35, 31, 0.2);
+}
+
+.ai-progress-modal__header,
+.ai-progress-modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+}
+
+.ai-progress-modal__header {
+  border-bottom: 1px solid var(--ink);
+}
+
+.ai-progress-modal__header h2 {
+  margin: 4px 0 0;
+  font-size: 28px;
+  letter-spacing: -0.03em;
+}
+
+.ai-progress-status {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  margin: 20px;
+  padding: 16px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.ai-progress-status::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 38%;
+  height: 3px;
+  background: var(--accent-2);
+  animation: ai-progress-scan 1.6s ease-in-out infinite;
+}
+
+.ai-progress-modal--complete .ai-progress-status::after,
+.ai-progress-modal--fallback .ai-progress-status::after,
+.ai-progress-modal--error .ai-progress-status::after {
+  width: 100%;
+  animation: none;
+}
+
+.ai-progress-modal--complete .ai-progress-status::after {
+  background: var(--positive);
+}
+
+.ai-progress-modal--fallback .ai-progress-status::after,
+.ai-progress-modal--error .ai-progress-status::after {
+  background: var(--warning);
+}
+
+.ai-progress-status__signal {
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border: 2px solid var(--accent-2);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+
+.ai-progress-modal--complete .ai-progress-status__signal,
+.ai-progress-modal--fallback .ai-progress-status__signal,
+.ai-progress-modal--error .ai-progress-status__signal {
+  border-color: currentColor;
+  animation: none;
+}
+
+.ai-progress-status div {
+  display: grid;
+  gap: 5px;
+}
+
+.ai-progress-status small,
+.ai-progress-step small,
+.ai-progress-modal__footer small {
+  color: var(--muted);
+}
+
+.ai-progress-status small {
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.ai-progress-status strong {
+  line-height: 1.5;
+}
+
+.ai-progress-steps {
+  flex: 1;
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0 20px 20px;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.ai-progress-step {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 24px;
+  gap: 12px;
+  align-items: center;
+  min-height: 72px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.ai-progress-step > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ai-progress-step div {
+  display: grid;
+  gap: 4px;
+}
+
+.ai-progress-step i {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: #fff;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.ai-progress-step--active > span {
+  border-color: var(--accent-2);
+  background: rgba(138, 106, 34, 0.1);
+  color: var(--accent-2);
+}
+
+.ai-progress-step--done > span,
+.ai-progress-step--done i {
+  border-color: var(--positive);
+  background: var(--positive);
+  color: #fff;
+}
+
+.ai-progress-step--error > span,
+.ai-progress-step--error i {
+  border-color: var(--warning);
+  background: var(--warning);
+  color: #fff;
+}
+
+.ai-progress-step--waiting {
+  opacity: 0.58;
+}
+
+.ai-progress-modal__footer {
+  flex-wrap: wrap;
+  border-top: 1px solid var(--ink);
+  background: rgba(21, 23, 18, 0.04);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ai-progress-modal__footer > span {
+  font-weight: 800;
+}
+
+@keyframes ai-progress-scan {
+  0% { transform: translateX(-105%); }
+  50% { transform: translateX(165%); }
+  100% { transform: translateX(-105%); }
+}
+
 .position-chart {
   position: relative;
   display: grid;
@@ -4819,6 +5037,14 @@ input[type="file"] {
     grid-template-columns: 1fr;
   }
 
+  .portfolio-kpi-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-workbench__top {
+    grid-template-columns: 1fr;
+  }
+
   .overview-command-grid {
     grid-template-columns: 1fr;
   }
@@ -4894,6 +5120,10 @@ input[type="file"] {
   .main-stage {
     padding: 16px;
     overflow-x: clip;
+  }
+
+  .portfolio-kpi-strip {
+    grid-template-columns: 1fr;
   }
 
   .modal-backdrop {

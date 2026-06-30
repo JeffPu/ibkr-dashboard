@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -78,19 +78,48 @@ class MCPToolPayload(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class PortfolioRiskPoint(BaseModel):
+    severity: Literal["high", "medium", "low"]
+    title: str
+    detail: str
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class PortfolioTrackingPoint(BaseModel):
+    item: str
+    why: str
+    trigger: str
+    horizon: Literal["7d", "30d", "quarterly"]
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class PortfolioResearchSource(BaseModel):
+    id: str
+    title: str
+    url: str
+    published_at: str | None = None
+    source_type: Literal["filing", "company_ir", "exchange", "financial_media", "other"] = "other"
+
+
+class PortfolioAdviceCard(BaseModel):
+    rank: Literal["01", "02", "03", "04"]
+    icon: Literal["alert", "search", "compass", "calendar", "check"]
+    title: str
+    body: str
+
+
 class PortfolioRiskRow(BaseModel):
+    position_key: str
     symbol: str
     current_price: float | None = None
     weight_pct: float
     unrealized_pnl: float | None = None
-    ai_relevance: str
-    ai_relevance_reason: str | None = None
     logic_status: str
     recommendation: str
-    risk_points: list[str] = Field(default_factory=list)
-    tracking_points: list[str] = Field(default_factory=list)
-    position_role: str | None = None
-    evidence: list[str] = Field(default_factory=list)
+    risk_points: list[PortfolioRiskPoint] = Field(default_factory=list)
+    tracking_points: list[PortfolioTrackingPoint] = Field(default_factory=list)
+    sources: list[PortfolioResearchSource] = Field(default_factory=list)
+    research_status: Literal["ready", "missing"] = "missing"
     status: AnalysisStatus
     confidence: float | None = None
     source: str
@@ -99,17 +128,9 @@ class PortfolioRiskRow(BaseModel):
 
 
 class PortfolioRebalanceAdvice(BaseModel):
-    cards: list[dict[str, Any]] = Field(default_factory=list)
+    cards: list[PortfolioAdviceCard] = Field(default_factory=list)
     action_today: str | None = None
     thinking_prompt: str | None = None
-    market_note: str | None = None
-    research_direction: str | None = None
-    undervalued_symbols: str | None = None
-    crowded_symbols: str | None = None
-    catalysts_30d: str | None = None
-    data_90d: str | None = None
-    optimal_structure: str | None = None
-    invalidation: str | None = None
     status: AnalysisStatus
     source: str
     as_of: str | None = None

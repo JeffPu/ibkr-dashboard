@@ -107,18 +107,34 @@ export interface MarketAnalysisSection {
 }
 
 export interface PortfolioRiskRow {
+  position_key: string;
   symbol: string;
   current_price: number | null;
   weight_pct: number;
   unrealized_pnl: number | null;
-  ai_relevance: string;
-  ai_relevance_reason: string | null;
   logic_status: string;
   recommendation: string;
-  risk_points: string[];
-  tracking_points: string[];
-  position_role: string | null;
-  evidence: string[];
+  risk_points: Array<{
+    severity: "high" | "medium" | "low";
+    title: string;
+    detail: string;
+    evidence_ids: string[];
+  }>;
+  tracking_points: Array<{
+    item: string;
+    why: string;
+    trigger: string;
+    horizon: "7d" | "30d" | "quarterly";
+    evidence_ids: string[];
+  }>;
+  sources: Array<{
+    id: string;
+    title: string;
+    url: string;
+    published_at: string | null;
+    source_type: "filing" | "company_ir" | "exchange" | "financial_media" | "other";
+  }>;
+  research_status: "ready" | "missing";
   status: AnalysisStatus;
   confidence: number | null;
   source: string;
@@ -127,22 +143,35 @@ export interface PortfolioRiskRow {
 }
 
 export interface PortfolioRebalanceAdvice {
-  cards: ApiRecord[];
+  cards: Array<{
+    rank: "01" | "02" | "03" | "04";
+    icon: "alert" | "search" | "compass" | "calendar" | "check";
+    title: string;
+    body: string;
+  }>;
   action_today: string | null;
   thinking_prompt: string | null;
-  market_note: string | null;
-  research_direction: string | null;
-  undervalued_symbols: string | null;
-  crowded_symbols: string | null;
-  catalysts_30d: string | null;
-  data_90d: string | null;
-  optimal_structure: string | null;
-  invalidation: string | null;
   status: AnalysisStatus;
   source: string;
   as_of: string | null;
   confidence: number | null;
   reason: string | null;
+}
+
+export interface PortfolioRefreshJob {
+  job_id: string;
+  status: "accepted" | "running" | "ready" | "fallback" | "error";
+  stage: "accepted" | "preparing_inputs" | "researching_web" | "analyzing_risks" | "persisting" | "ready" | "fallback" | "error";
+  section: PortfolioAnalysisSectionKey;
+  symbol: string | null;
+  message: string;
+  started_at: string;
+  updated_at: string;
+  completed_positions: number;
+  total_positions: number;
+  stage_durations_ms: Record<string, number>;
+  reason: string | null;
+  failed_stage: PortfolioRefreshJob["stage"] | null;
 }
 
 export interface PortfolioRiskSection {
@@ -439,6 +468,7 @@ export interface SettingsResponse {
   minimax_base_url: string;
   deepseek_api_key: string;
   deepseek_base_url: string;
+  tavily_api_key: string;
   futu_connection_mode: FutuConnectionMode;
   futu_opend_host: string;
   futu_opend_port: number;
