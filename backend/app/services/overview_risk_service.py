@@ -48,8 +48,7 @@ def missing_risk_dashboard(updated_at: str | None) -> dict:
             progress_limit=limit,
         )
         for key, label, threshold, source, limit in [
-            ("net_exposure", "净敞口率", "≤100%", "ibkr_account_snapshots_v1", 100),
-            ("margin_usage", "Margin 使用率", "≤20% 安全 / ≤30% 警戒", "ibkr_account_snapshots_v1", 30),
+            ("margin_usage", "Margin 使用率（估算）", "≤20% 安全 / ≤30% 警戒", "ibkr_account_snapshots_v1", 30),
             ("largest_holding", "最大单仓", "≤15% 安全 / ≤25% 关注", "ibkr_position_snapshots_v1", 25),
             ("top3_concentration", "前三仓合计", "≤40% 安全 / ≤60% 关注", "ibkr_position_snapshots_v1", 60),
             ("downside_breadth", "今日下跌广度", "≤40%", "ibkr_position_snapshots_v1", 40),
@@ -84,8 +83,7 @@ def build_risk_dashboard(
         [abs(position_market_value(position)) for position in positions if abs(position_market_value(position)) > 1e-9],
         reverse=True,
     )
-    net_exposure = (abs(market_value) / equity * 100) if equity > 0 else None
-    borrowed_amount = max(-cash, abs(market_value) - equity, 0.0)
+    borrowed_amount = max(-cash, market_value - equity, 0.0)
     margin_usage = (borrowed_amount / equity * 100) if equity > 0 else None
     largest_holding = (sorted_values[0] / total_holding_value * 100) if total_holding_value > 0 and sorted_values else None
     top3 = (sum(sorted_values[:3]) / total_holding_value * 100) if total_holding_value > 0 and sorted_values else None
@@ -93,32 +91,17 @@ def build_risk_dashboard(
 
     metrics = [
         _risk_metric(
-            key="net_exposure",
-            label="净敞口率",
-            value=net_exposure,
-            severity=_severity_for_net_exposure(net_exposure),
-            threshold_label="≤100%",
-            source="ibkr_account_snapshots_v1",
-            reason="stock_market_value_divided_by_total_equity",
-            action=(
-                "已启用 Margin，检查借入额度与可用缓冲。"
-                if net_exposure is not None and net_exposure > 100
-                else "净敞口未超过净资产，维持常规监控。"
-            ),
-            progress_limit=120,
-        ),
-        _risk_metric(
             key="margin_usage",
-            label="Margin 使用率",
+            label="Margin 使用率（估算）",
             value=margin_usage,
             severity=_severity_for_margin_usage(margin_usage),
             threshold_label="≤20% 安全 / ≤30% 警戒",
             source="ibkr_account_snapshots_v1",
-            reason="max_negative_cash_or_exposure_above_equity_divided_by_equity",
+            reason="max_negative_cash_or_signed_all_positions_above_equity_divided_by_equity",
             action=(
-                "Margin 使用率偏高，优先保留可用现金缓冲。"
+                "借款金额相对净值的代理值偏高；这不是 IBKR 官方维持保证金占用率。"
                 if margin_usage is not None and margin_usage > 20
-                else "当前 Margin 使用率较低，持续监控即可。"
+                else "借款金额相对净值的代理值；这不是 IBKR 官方维持保证金占用率。"
             ),
             progress_limit=30,
         ),
@@ -262,16 +245,6 @@ def _risk_metric(
         "reason": reason,
         "action": action,
     }
-
-
-def _severity_for_net_exposure(value: float | None) -> str:
-    if value is None:
-        return "watch"
-    if value <= 100:
-        return "healthy"
-    if value <= 120:
-        return "caution"
-    return "alert"
 
 
 def _severity_for_margin_usage(value: float | None) -> str:

@@ -64,7 +64,9 @@ const DEFAULT_BENCHMARKS: BenchmarkSeries[] = [
   { key: "qqq", label: "QQQ", symbol: "QQQ", status: "pending", source: "", points: [] },
 ];
 
-export function OverviewPage({ onNavigate }: { onNavigate?: (page: PageKey) => void }) {
+type NavigateOptions = { expiryStatus?: "all" | "within_30" | "within_7" | "expired" };
+
+export function OverviewPage({ onNavigate }: { onNavigate?: (page: PageKey, options?: NavigateOptions) => void }) {
   const { state, load } = useApiData<OverviewResponse>(() => api.overview());
   const [benchmarkRows, setBenchmarkRows] = useState<ApiRecord[] | null>(null);
 
@@ -125,7 +127,7 @@ function OverviewContent({
 }: {
   data: OverviewResponse;
   benchmarkRows: ApiRecord[] | null;
-  onNavigate?: (page: PageKey) => void;
+  onNavigate?: (page: PageKey, options?: NavigateOptions) => void;
 }) {
   const [method, setMethod] = useState<ReturnMethod>("simple");
   const [range, setRange] = useState<RangeKey>("ytd");
@@ -353,6 +355,8 @@ function OverviewContent({
             />
           </Surface>
 
+          <OptionExpirationAlerts data={data} onOpenAll={() => onNavigate?.("positions", { expiryStatus: "within_30" })} />
+
           <section className="overview-bottom-grid">
             <div className="overview-data-column">
               <Surface className="overview-table-panel">
@@ -399,9 +403,34 @@ function OverviewContent({
           </section>
         </div>
 
-        <OverviewBetaStress currency={currency} />
+        <OverviewBetaStress />
       </section>
     </div>
+  );
+}
+
+function OptionExpirationAlerts({ data, onOpenAll }: { data: OverviewResponse; onOpenAll: () => void }) {
+  const alerts = data.option_expiration_alerts;
+  if (!alerts) return null;
+  return (
+    <Surface title="期权到期提醒" className="option-alert-surface">
+      {alerts.items.length === 0 ? (
+        <div className="empty-state empty-state--compact"><strong>暂无近期到期提醒</strong><span>未来 30 天及已到期待核对持仓会显示在这里。</span></div>
+      ) : (
+        <>
+          {alerts.is_stale ? <div className="option-snapshot-note option-snapshot-note--stale">数据可能过期 · 快照 {formatDate(alerts.snapshot_date)}</div> : null}
+          <div className="option-alert-list">
+            {alerts.items.map((item) => (
+              <article key={item.contract_key} className={`option-alert-item option-alert-item--${item.expiry_risk}`}>
+                <div><strong>{item.contract_title}</strong><small>快照 {formatDate(item.snapshot_date)}</small></div>
+                <span>{item.days_to_expiry < 0 ? "已到期 · 待核对" : `剩余 ${item.days_to_expiry} 天`}{item.is_short ? " · 卖方持仓" : ""}</span>
+              </article>
+            ))}
+          </div>
+          {alerts.remaining_count > 0 ? <button type="button" className="link-button" onClick={onOpenAll}>另有 {alerts.remaining_count} 个，查看 30 天内期权</button> : null}
+        </>
+      )}
+    </Surface>
   );
 }
 

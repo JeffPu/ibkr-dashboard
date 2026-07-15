@@ -23,9 +23,11 @@ const NAV_ITEMS: NavItem[] = [
   { key: "settings", label: "设置与导入", detail: "凭据 / XML / 集成", icon: "settings" },
 ];
 
-const PAGE_RENDERERS: Record<PageKey, (navigate: (page: PageKey) => void) => JSX.Element> = {
+type NavigateOptions = { expiryStatus?: "all" | "within_30" | "within_7" | "expired" };
+
+const PAGE_RENDERERS: Record<PageKey, (navigate: (page: PageKey, options?: NavigateOptions) => void, options?: NavigateOptions) => JSX.Element> = {
   overview: (navigate) => <OverviewPage onNavigate={navigate} />,
-  positions: () => <PositionsPage />,
+  positions: (_navigate, options) => <PositionsPage initialExpiryFilter={options?.expiryStatus} />,
   performance: () => <PerformancePage />,
   trades: () => <TradesPage />,
   portfolioAnalysis: () => (
@@ -38,9 +40,14 @@ const PAGE_RENDERERS: Record<PageKey, (navigate: (page: PageKey) => void) => JSX
 
 function App() {
   const [activePage, setActivePage] = useState<PageKey>("overview");
+  const [navigateOptions, setNavigateOptions] = useState<NavigateOptions>();
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const activeItem = useMemo(() => NAV_ITEMS.find((item) => item.key === activePage) ?? NAV_ITEMS[0], [activePage]);
   const renderPage = PAGE_RENDERERS[activePage];
+  const navigate = (page: PageKey, options?: NavigateOptions) => {
+    setNavigateOptions(options);
+    setActivePage(page);
+  };
 
   return (
     <div className={`app-shell ${sidebarVisible ? "" : "app-shell--sidebar-hidden"}`.trim()}>
@@ -58,7 +65,7 @@ function App() {
               key={item.key}
               type="button"
               className={item.key === activePage ? "active" : ""}
-              onClick={() => setActivePage(item.key)}
+              onClick={() => navigate(item.key)}
             >
               <Icon name={item.icon ?? "overview"} wrapClassName="nav-icon" />
               <strong>{item.label}</strong>
@@ -91,7 +98,7 @@ function App() {
           </div>
         </div>
         <AppErrorBoundary resetKey={activePage}>
-          {renderPage(setActivePage)}
+          {renderPage(navigate, navigateOptions)}
         </AppErrorBoundary>
       </main>
     </div>

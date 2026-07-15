@@ -17,6 +17,7 @@ import { DataState, DataTable, DeltaText, Field, MetricCard, PageHeader, Paginat
 
 type TradeQuery = {
   symbol: string;
+  asset_type: string;
   side: string;
   start_date: string;
   end_date: string;
@@ -60,7 +61,7 @@ export function TradesPage() {
 }
 
 function TradeRecordsPanel() {
-  const [query, setQuery] = useState<TradeQuery>({ symbol: "", side: "", start_date: "", end_date: "", page: 1, page_size: 20 });
+  const [query, setQuery] = useState<TradeQuery>({ symbol: "", asset_type: "", side: "", start_date: "", end_date: "", page: 1, page_size: 20 });
   const { state, load } = useApiData<ApiRecord>(() => api.trades(query), [query]);
 
   return (
@@ -72,8 +73,15 @@ function TradeRecordsPanel() {
         <Field label="结束时间">
           <input type="date" value={query.end_date} onChange={(event) => setQuery({ ...query, end_date: event.target.value, page: 1 })} />
         </Field>
-        <Field label="股票代码">
-          <input value={query.symbol} placeholder="AAPL" onChange={(event) => setQuery({ ...query, symbol: event.target.value.toUpperCase(), page: 1 })} />
+        <Field label="标的／合约">
+          <input value={query.symbol} placeholder="AAPL 或原始合约代码" onChange={(event) => setQuery({ ...query, symbol: event.target.value.toUpperCase(), page: 1 })} />
+        </Field>
+        <Field label="资产类型">
+          <select value={query.asset_type} onChange={(event) => setQuery({ ...query, asset_type: event.target.value, page: 1 })}>
+            <option value="">全部</option>
+            <option value="stock">股票</option>
+            <option value="option">期权</option>
+          </select>
         </Field>
         <Field label="买入/卖出">
           <select value={query.side} onChange={(event) => setQuery({ ...query, side: event.target.value, page: 1 })}>
@@ -118,7 +126,10 @@ function TradeRecordsContent({
         rows={rows}
         columns={[
           { key: "trade_date", label: "成交时间", render: (row) => formatDateTimeMinute(row.trade_date ?? row.trade_date_iso) },
-          { key: "symbol", label: "股票代码" },
+          { key: "symbol", label: "标的／合约", render: (row) => asText(row.asset_category) === "OPT" || asText(row.asset_category) === "FOP" ? <div className="option-contract-cell"><strong>{asText(row.contract_title)}</strong><small>{asText(row.raw_contract_code ?? row.symbol)}</small></div> : asText(row.symbol) },
+          { key: "asset_category", label: "资产", render: (row) => asText(row.asset_category) === "OPT" || asText(row.asset_category) === "FOP" ? "期权" : "股票" },
+          { key: "open_close_indicator", label: "开平", render: (row) => formatOpenClose(row.open_close_indicator) },
+          { key: "transaction_type", label: "交易事件", render: (row) => formatTradeEvent(row) },
           { key: "side", label: "方向", render: (row) => <DirectionPill value={asText(row.side)} buyLabel="买入" sellLabel="卖出" /> },
           { key: "trade_price", label: "成交价", align: "right", render: (row) => formatCurrency(row.trade_price, getTradeCurrency(row)) },
           { key: "quantity", label: "数量", align: "right", render: (row) => formatQuantity(row.quantity) },
@@ -273,4 +284,17 @@ function formatQuantity(value: unknown): string {
     maximumFractionDigits: 4,
     minimumFractionDigits: 0,
   }).format(absolute);
+}
+
+function formatOpenClose(value: unknown): string {
+  const text = asText(value).toUpperCase();
+  if (text === "O" || text === "OPEN") return "开仓";
+  if (text === "C" || text === "CLOSE") return "平仓";
+  return "-";
+}
+
+function formatTradeEvent(row: ApiRecord): string {
+  const transactionType = asText(row.transaction_type);
+  const notes = asText(row.notes);
+  return transactionType || notes || "-";
 }

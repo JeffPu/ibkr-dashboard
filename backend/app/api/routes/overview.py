@@ -17,13 +17,13 @@ from app.repositories.derived_repository import DerivedRepository
 from app.repositories.raw_repository import RawRepository
 from app.services.industry_mapping_service import IndustryMappingService
 from app.services.overview_risk_service import build_risk_dashboard as _build_risk_dashboard
-from app.services.overview_risk_service import daily_loss_at_risk as _daily_loss_at_risk
 from app.services.overview_risk_service import load_latest_position_rows as _load_latest_position_rows
 from app.services.overview_risk_service import missing_risk_dashboard as _missing_risk_dashboard
 from app.services.overview_risk_service import position_market_value as _position_market_value
 from app.services.overview_risk_service import position_quantity as _position_quantity
 from app.services.quote_service import QuoteService
 from app.services.settings_service import SettingsService
+from app.services.option_expiration import build_expiration_alerts, is_option
 from app.utils.dates import parse_iso_date as _parse_iso_date
 from app.utils.numbers import to_float as _to_float
 
@@ -60,7 +60,7 @@ _RISK_BENCHMARKS = [
     {"key": "nasdaq", "label": "NASDAQ Composite", "symbol": "^IXIC"},
     {"key": "sp500", "label": "S&P 500", "symbol": "^GSPC"},
 ]
-_BETA_WINDOWS = {30, 60, 90, 120}
+_BETA_WINDOWS = {20, 60, 120}
 
 def _benchmark_placeholders() -> list[dict]:
     return [
@@ -143,6 +143,13 @@ def _empty_overview(sync_at: str | None) -> dict:
         "benchmark_series": benchmark_series,
         "asset_metric_rows": [],
         "recent_trades": [],
+        "option_expiration_alerts": {
+            "items": [],
+            "total": 0,
+            "remaining_count": 0,
+            "snapshot_date": None,
+            "is_stale": False,
+        },
         "ai_summary": {
             "status": "pending",
             "title": "AI Summary",
@@ -813,15 +820,6 @@ def _normalize_risk_benchmark(value: str | None) -> str:
     return text if text in keys else "qqq"
 
 
-def _normalize_drawdown_pct(value: float | str | None) -> float:
-    try:
-        parsed = float(value if value is not None else -10.0)
-    except (TypeError, ValueError):
-        parsed = -10.0
-    parsed = -abs(parsed)
-    return round(max(-30.0, min(-1.0, parsed)) * 2) / 2
-
-
 def _history_returns(points: list[dict], *, window: int) -> dict[str, float]:
     clean_points: list[tuple[str, float]] = []
     for point in points:
@@ -856,51 +854,7 @@ def _compute_beta(symbol_returns: dict[str, float], benchmark_returns: dict[str,
     return covariance / variance, len(common_dates), "ols_regression"
 
 
-def _stress_scenario(
-    *,
-    label: str,
-    drawdown_pct: float,
-    portfolio_beta: float | None,
-    total_market_value: float,
-    equity: float,
-    source: str,
-) -> dict:
-    estimated_loss = None
-    projected_equity = None
-    equity_loss_pct = None
-    status = "calculating" if portfolio_beta is None else "ready"
-    if portfolio_beta is not None:
-        estimated_loss = round(total_market_value * portfolio_beta * (drawdown_pct / 100), 2)
-        projected_equity = round(equity + estimated_loss, 2) if equity else None
-        if equity:
-            equity_loss_pct = round(estimated_loss / equity * 100, 2)
-    risk_note = "Beta 数据不足，等待历史价格计算。"
-    if equity_loss_pct is not None:
-        if abs(equity_loss_pct) > 30:
-            risk_note = "净亏损区间，Margin 风险急升，应降低高 Beta 敞口。"
-        elif abs(equity_loss_pct) > 22:
-            risk_note = "浮盈几近归零，需启动止损预案并复核高 Beta 仓位。"
-        elif abs(equity_loss_pct) > 15:
-            risk_note = "浮盈大幅收窄，核查核心持仓逻辑是否变化。"
-        else:
-            risk_note = "浮盈缓冲相对充足，正常观察。"
-    return {
-        "label": label,
-        "drawdown_pct": drawdown_pct,
-        "portfolio_beta": round(portfolio_beta, 4) if portfolio_beta is not None else None,
-        "multiplier": round(portfolio_beta, 2) if portfolio_beta is not None else None,
-        "estimated_loss": estimated_loss,
-        "stress_loss": estimated_loss,
-        "projected_equity": projected_equity,
-        "equity_loss_pct": equity_loss_pct,
-        "status": status,
-        "source": source,
-        "reason": None if portfolio_beta is not None else "Beta 计算中 / 数据不足",
-        "risk_note": risk_note,
-    }
-
-
-def _empty_risk_warning(selected_benchmark: str, window: int, custom_drawdown: float, reason: str) -> dict:
+def _empty_risk_warning(selected_benchmark: str, window: int, reason: str) -> dict:
     return {
         "status": "missing_data",
         "selected_benchmark": selected_benchmark,
@@ -911,16 +865,6 @@ def _empty_risk_warning(selected_benchmark: str, window: int, custom_drawdown: f
         "beta_updated_at": None,
         "benchmarks": [],
         "positions": [],
-        "scenarios": [],
-        "custom_drawdown": _stress_scenario(
-            label="自定义压力",
-            drawdown_pct=custom_drawdown,
-            portfolio_beta=None,
-            total_market_value=0,
-            equity=0,
-            source="market_history",
-        ),
-        "var_comparison": None,
         "sources": [],
         "missing_reasons": [reason],
     }
@@ -967,18 +911,16 @@ def _convert_position_rows(
 def get_overview_risk_warning(
     benchmark: str | None = "qqq",
     window: int = 60,
-    drawdown: float | None = -10.0,
 ) -> dict:
     selected_benchmark = _normalize_risk_benchmark(benchmark)
     beta_window = _normalize_beta_window(window)
-    custom_drawdown = _normalize_drawdown_pct(drawdown)
     latest_sync_at = _settings_service.get().last_successful_sync_at
     if _raw_repository is None:
-        return _empty_risk_warning(selected_benchmark, beta_window, custom_drawdown, "storage_unavailable")
+        return _empty_risk_warning(selected_benchmark, beta_window, "storage_unavailable")
 
     latest = _raw_repository.get_latest_account_snapshot()
     if latest is None:
-        return _empty_risk_warning(selected_benchmark, beta_window, custom_drawdown, "missing_account_snapshot")
+        return _empty_risk_warning(selected_benchmark, beta_window, "missing_account_snapshot")
 
     account_id = str(latest.get("account_id", "") or "")
     report_date = str(latest.get("report_date", "") or "")
@@ -986,7 +928,7 @@ def get_overview_risk_warning(
     display_currency = _settings_service.get().base_currency
     current_positions, all_positions = _load_latest_position_rows(_raw_repository, account_id, report_date)
     if not current_positions:
-        return _empty_risk_warning(selected_benchmark, beta_window, custom_drawdown, "missing_position_snapshots")
+        return _empty_risk_warning(selected_benchmark, beta_window, "missing_position_snapshots")
     current_positions = _convert_position_rows(
         current_positions,
         account_base_currency=account_base_currency,
@@ -1011,11 +953,12 @@ def get_overview_risk_warning(
             "market_value": abs(_convert_money(_position_market_value(position), fx_rate)),
         }
         for position in current_positions
+        if not is_option(position)
         if str(position.get("symbol", "") or "").strip()
     ]
     total_market_value = round(sum(item["market_value"] for item in position_values), 2)
     if total_market_value <= 1e-9:
-        return _empty_risk_warning(selected_benchmark, beta_window, custom_drawdown, "zero_position_market_value")
+        return _empty_risk_warning(selected_benchmark, beta_window, "zero_position_market_value")
 
     equity = _convert_money(latest.get("total_equity", 0), fx_rate)
     end_date = _parse_iso_date(report_date) or date.today()
@@ -1069,17 +1012,22 @@ def get_overview_risk_warning(
         weighted_beta = 0.0
         valid_positions = 0
         missing_positions = 0
+        beta_results: list[tuple[dict, float | None, int, str]] = []
         for item in position_values:
             symbol = item["symbol"]
             beta, observations, reason = _compute_beta(
                 returns_by_symbol.get(symbol, {}),
                 benchmark_returns,
             )
+            beta_results.append((item, beta, observations, reason))
+        eligible_market_value = sum(item["market_value"] for item, beta, _observations, _reason in beta_results if beta is not None)
+        for item, beta, observations, reason in beta_results:
+            symbol = item["symbol"]
             contribution = None
             status = "missing_data"
             if beta is not None:
                 valid_positions += 1
-                weight = item["market_value"] / total_market_value
+                weight = item["market_value"] / eligible_market_value if eligible_market_value else 0.0
                 contribution = beta * weight
                 weighted_beta += contribution
                 status = "ready"
@@ -1099,6 +1047,7 @@ def get_overview_risk_warning(
                 "label": benchmark_item["label"],
                 "symbol": benchmark_symbol,
                 "portfolio_beta": round(weighted_beta, 4) if valid_positions else None,
+                "coverage_pct": round(eligible_market_value / total_market_value * 100, 2) if total_market_value else 0.0,
                 "status": "ready" if valid_positions and not missing_positions else "partial" if valid_positions else "missing_data",
                 "valid_positions": valid_positions,
                 "missing_positions": missing_positions,
@@ -1116,50 +1065,6 @@ def get_overview_risk_warning(
         position_row["status"] = beta_detail.get("status", "missing_data")
         position_row["source"] = "market_history"
         position_row["reason"] = beta_detail.get("reason")
-    scenario_source = f"ols_beta_{beta_window}_day_{selected_benchmark}"
-    scenarios = [
-        _stress_scenario(
-            label=label,
-            drawdown_pct=drawdown_pct,
-            portfolio_beta=portfolio_beta,
-            total_market_value=total_market_value,
-            equity=equity,
-            source=scenario_source,
-        )
-        for label, drawdown_pct in [
-            ("轻度回调", -5.0),
-            ("中度调整", -10.0),
-            ("深度回撤", -15.0),
-            ("极端压力", -20.0),
-        ]
-    ]
-    custom_scenario = _stress_scenario(
-        label="自定义压力",
-        drawdown_pct=custom_drawdown,
-        portfolio_beta=portfolio_beta,
-        total_market_value=total_market_value,
-        equity=equity,
-        source=scenario_source,
-    )
-    daily_loss = _daily_loss_at_risk(current_positions, all_positions, report_date)
-    var_comparison = None
-    if daily_loss is not None:
-        display_loss = _convert_money(daily_loss, fx_rate)
-        var_comparison = {
-            "label": "单日 VaR 对比",
-            "drawdown_pct": None,
-            "portfolio_beta": None,
-            "multiplier": None,
-            "estimated_loss": display_loss,
-            "stress_loss": display_loss,
-            "projected_equity": round(equity + display_loss, 2) if equity else None,
-            "equity_loss_pct": round(display_loss / equity * 100, 2) if equity else None,
-            "status": "ready",
-            "source": "ibkr_position_snapshots_v1",
-            "reason": None,
-            "risk_note": "基于持仓当日负向变化估算，用于和 Beta 情景横向比较。",
-        }
-
     selected_status = str(selected.get("status") if selected else "missing_data")
     response_status = "ready" if selected_status == "ready" else "partial" if portfolio_beta is not None else "missing_data"
     return {
@@ -1172,9 +1077,6 @@ def get_overview_risk_warning(
         "beta_updated_at": beta_updated_at or latest_sync_at,
         "benchmarks": benchmark_rows,
         "positions": list(position_rows_by_symbol.values()),
-        "scenarios": scenarios,
-        "custom_drawdown": custom_scenario,
-        "var_comparison": var_comparison,
         "sources": sources,
         "missing_reasons": sorted(missing_reasons),
     }
@@ -1293,10 +1195,25 @@ def get_overview() -> dict:
             symbol = str(p.get("symbol", "") or "")
             if not symbol:
                 continue
+            identity = (
+                ":".join(
+                    str(p.get(key) or "").upper()
+                    for key in ("asset_category", "symbol", "expiry", "strike", "put_call", "conid")
+                )
+                if is_option(p)
+                else symbol
+            )
             bucket = aggregated.setdefault(
-                symbol,
+                identity,
                 {
                     "symbol": symbol,
+                    "asset_category": p.get("asset_category"),
+                    "expiry": p.get("expiry"),
+                    "strike": p.get("strike"),
+                    "put_call": p.get("put_call"),
+                    "multiplier": p.get("multiplier"),
+                    "underlying": p.get("underlying"),
+                    "conid": p.get("conid"),
                     "report_date": p.get("report_date"),
                     "currency": p.get("currency"),
                     "fx_rate_to_base": p.get("fx_rate_to_base", p.get("fxRateToBase")),
@@ -1343,7 +1260,7 @@ def get_overview() -> dict:
             position.get("market_value_snapshot", position.get("position_value", 0)) or 0
         )
         avg_cost = float(position.get("average_cost_price", position.get("cost_basis_price", 0)) or 0)
-        if _quote_service is not None and symbol:
+        if _quote_service is not None and symbol and not is_option(position):
             cached = quote_cache.get(symbol)
             if cached is None:
                 quote = (
@@ -1376,6 +1293,7 @@ def get_overview() -> dict:
             {
                 **position,
                 "symbol": symbol,
+                "asset_category": position.get("asset_category"),
                 "market_value": value,
                 "unrealized_pnl": position_unrealized,
             }
@@ -1673,6 +1591,11 @@ def get_overview() -> dict:
         report_date=str(report_date),
         updated_at=valuation_as_of_local or last_successful_sync_at_local or report_date_iso,
     )
+    option_expiration_alerts = build_expiration_alerts(
+        latest_positions,
+        timezone_name=timezone_name,
+        limit=5,
+    )
     ui_summary = _build_ui_summary(
         report_date_iso=report_date_iso,
         valuation_mode=valuation_mode,
@@ -1779,6 +1702,7 @@ def get_overview() -> dict:
             "updated_at": None,
         },
         "risk_dashboard": risk_dashboard,
+        "option_expiration_alerts": option_expiration_alerts,
         "net_value_curve": {
             "rows": display_equity_curve,
             "cash_flow_events": display_asset_flow_events,

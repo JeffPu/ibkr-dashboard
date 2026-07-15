@@ -272,7 +272,6 @@ export type OverviewBenchmarkStatus = "ready" | "pending" | "unavailable";
 export type OverviewRiskSeverity = "healthy" | "watch" | "caution" | "alert";
 
 export type OverviewRiskMetricKey =
-  | "net_exposure"
   | "margin_usage"
   | "largest_holding"
   | "top3_concentration"
@@ -280,7 +279,7 @@ export type OverviewRiskMetricKey =
 
 export type OverviewRiskBenchmarkKey = "qqq" | "nasdaq" | "sp500";
 
-export type OverviewRiskWindow = 30 | 60 | 90 | 120;
+export type OverviewRiskWindow = 20 | 60 | 120;
 
 export type OverviewRiskWarningStatus = "ready" | "calculating" | "partial" | "missing_data";
 
@@ -316,6 +315,7 @@ export interface OverviewBenchmarkBeta {
   updated_at?: string | null;
   valid_positions?: number;
   missing_positions?: number;
+  coverage_pct?: number;
 }
 
 export interface OverviewPositionBetaValue {
@@ -339,22 +339,6 @@ export interface OverviewPositionBeta {
   reason: string | null;
 }
 
-export interface OverviewStressScenario {
-  key?: string;
-  label: string;
-  drawdown_pct: number | null;
-  portfolio_beta: number | null;
-  estimated_loss?: number | null;
-  stress_loss: number | null;
-  projected_equity: number | null;
-  equity_loss_pct?: number | null;
-  multiplier?: number | null;
-  status: OverviewRiskWarningStatus;
-  source: string;
-  reason: string | null;
-  risk_note?: string;
-}
-
 export interface OverviewRiskWarningResponse {
   status: OverviewRiskWarningStatus;
   selected_benchmark: OverviewRiskBenchmarkKey;
@@ -364,9 +348,6 @@ export interface OverviewRiskWarningResponse {
   beta_updated_at: string | null;
   benchmarks: OverviewBenchmarkBeta[];
   positions: OverviewPositionBeta[];
-  scenarios: OverviewStressScenario[];
-  custom_drawdown: OverviewStressScenario;
-  var_comparison: OverviewStressScenario | null;
   sources: string[];
   missing_reasons: string[];
 }
@@ -432,6 +413,23 @@ export interface OverviewResponse extends ApiRecord {
   net_value_curve?: ApiRecord;
   ui_summary?: OverviewUiSummary;
   risk_dashboard?: OverviewRiskDashboard;
+  option_expiration_alerts?: {
+    items: Array<{
+      contract_key: string;
+      contract_title: string;
+      raw_contract_code: string;
+      days_to_expiry: number;
+      expiry_status: string;
+      expiry_risk: string;
+      is_short: boolean;
+      snapshot_date: string | null;
+      is_stale: boolean;
+    }>;
+    total: number;
+    remaining_count: number;
+    snapshot_date: string | null;
+    is_stale: boolean;
+  };
 }
 
 export type AiProvider = "openai" | "minimax" | "deepseek" | "mock";

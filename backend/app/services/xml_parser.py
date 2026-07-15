@@ -26,6 +26,7 @@ def _option_fields(node: ET.Element) -> dict[str, str]:
         "put_call": _first_attr(node, "putCall", "put/call", "right", "callPut"),
         "multiplier": _first_attr(node, "multiplier"),
         "underlying": _first_attr(node, "underlyingSymbol", "underlying", "underlyingConid"),
+        "conid": _first_attr(node, "conid", "conId", "contractId"),
         "delta": _first_attr(node, "delta"),
         "gamma": _first_attr(node, "gamma"),
         "theta": _first_attr(node, "theta"),
@@ -82,7 +83,18 @@ def parse_xml_content(root: ET.Element) -> ParsedXmlData:
         asset_category = node.attrib.get("assetCategory", "")
         symbol = node.attrib.get("symbol", "")
         level_of_detail = node.attrib.get("levelOfDetail", "")
-        document_parts = [account_id, report_date, asset_category, symbol, level_of_detail]
+        option_fields = _option_fields(node)
+        document_parts = [account_id, report_date, asset_category, symbol]
+        if asset_category.upper() in {"OPT", "FOP"}:
+            document_parts.extend(
+                [
+                    option_fields["expiry"],
+                    option_fields["strike"],
+                    option_fields["put_call"],
+                    option_fields["conid"],
+                ]
+            )
+        document_parts.append(level_of_detail)
         if level_of_detail == "LOT":
             document_parts.append(
                 node.attrib.get("originatingTransactionID")
@@ -106,7 +118,7 @@ def parse_xml_content(root: ET.Element) -> ParsedXmlData:
                 unrealized_pnl_snapshot=node.attrib.get("fifoPnlUnrealized", "0"),
                 currency=node.attrib.get("currency", ""),
                 fx_rate_to_base=node.attrib.get("fxRateToBase", ""),
-                **_option_fields(node),
+                **option_fields,
             )
         )
 
@@ -165,6 +177,10 @@ def parse_xml_content(root: ET.Element) -> ParsedXmlData:
                 currency=node.attrib.get("currency", ""),
                 fifo_pnl_realized=float(node.attrib.get("fifoPnlRealized", "0") or 0),
                 ib_commission=float(node.attrib.get("ibCommission", "0") or 0),
+                asset_category=node.attrib.get("assetCategory", ""),
+                open_close_indicator=_first_attr(node, "openCloseIndicator", "openClose"),
+                transaction_type=_first_attr(node, "transactionType", "type"),
+                notes=_first_attr(node, "notes", "description"),
                 **_option_fields(node),
             )
         )

@@ -1,7 +1,7 @@
 from datetime import date
 from datetime import timedelta
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.api.currency_conversion import convert_money
 from app.api.currency_conversion import convert_position_money_values
@@ -19,6 +19,14 @@ from app.services.quote_service import fetch_nasdaq_candles
 from app.services.quote_service import fetch_yahoo_candles
 from app.services.account_currency import resolve_account_base_currency as _resolve_account_base_currency
 from app.services.settings_service import SettingsService
+from app.services.option_expiration import (
+    decorate_option,
+    is_option,
+    matches_expiry_filter,
+    option_summary,
+    snapshot_freshness,
+    sort_options,
+)
 from app.utils.dates import compact_date as _compact_date
 from app.utils.numbers import optional_float as _optional_float
 from app.utils.numbers import to_float as _to_float
@@ -51,13 +59,25 @@ def set_settings_service(service: SettingsService) -> None:
 
 
 @router.get("/api/positions", responses=STORAGE_UNAVAILABLE_OPENAPI_RESPONSE)
-def list_positions(symbol: str | None = None, page: int = 1, page_size: int = 20) -> dict:
+def list_positions(
+    symbol: str | None = None,
+    asset_type: str = "all",
+    expiry_status: str = "all",
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
+    normalized_asset_type = asset_type.lower()
+    if normalized_asset_type not in {"all", "stock", "option"}:
+        raise HTTPException(status_code=400, detail="invalid_asset_type")
+    normalized_expiry_status = expiry_status.lower()
+    if normalized_expiry_status not in {"all", "within_30", "within_7", "expired"}:
+        raise HTTPException(status_code=400, detail="invalid_expiry_status")
     use_realtime = _settings_service.get().display_realtime_prices
     currency_context = _resolve_currency_context([])
     display_currency = currency_context["display_currency"]
     if _raw_repository is None:
         return {
-            "filters": {"symbol": symbol, "page": max(page, 1), "page_size": max(min(page_size, 100), 1)},
+            "filters": {"symbol": symbol, "asset_type": normalized_asset_type, "expiry_status": normalized_expiry_status, "page": max(page, 1), "page_size": max(min(page_size, 100), 1)},
             "account_base_currency": currency_context["account_base_currency"],
             "display_currency": display_currency,
             "currency_conversion": currency_context["currency_conversion"],
@@ -67,7 +87,11 @@ def list_positions(symbol: str | None = None, page: int = 1, page_size: int = 20
         }
     normalized_page = max(page, 1)
     normalized_page_size = max(min(page_size, 100), 1)
-    all_items = _list_current_positions(symbol=symbol)
+    all_items = _list_current_positions(symbol=symbol, asset_type=normalized_asset_type)
+    if normalized_asset_type == "option" or (normalized_asset_type == "all" and normalized_expiry_status != "all"):
+        all_items = [decorate_option(item, timezone_name=_settings_service.get().timezone) for item in all_items if is_option(item)]
+        all_items = [item for item in all_items if matches_expiry_filter(item, normalized_expiry_status)]
+        all_items = sort_options(all_items)
     offset = (normalized_page - 1) * normalized_page_size
     items = all_items[offset : offset + normalized_page_size]
     currency_context = _resolve_currency_context(all_items)
@@ -75,13 +99,14 @@ def list_positions(symbol: str | None = None, page: int = 1, page_size: int = 20
     enriched = _enrich_positions(items, display_currency=display_currency)
     effective_realtime = any(bool(item.get("is_realtime")) for item in enriched)
     return {
-        "filters": {"symbol": symbol, "page": normalized_page, "page_size": normalized_page_size},
+        "filters": {"symbol": symbol, "asset_type": normalized_asset_type, "expiry_status": normalized_expiry_status, "page": normalized_page, "page_size": normalized_page_size},
         "account_base_currency": currency_context["account_base_currency"],
         "display_currency": display_currency,
         "currency_conversion": currency_context["currency_conversion"],
         "valuation_mode": "realtime" if (use_realtime or effective_realtime) else "snapshot",
         "items": enriched,
         "total": len(all_items),
+        **_option_response_meta(all_items, normalized_asset_type),
     }
 
 
@@ -102,7 +127,7 @@ def get_industry_allocation() -> dict:
             "items": [],
             "total_market_value": 0.0,
         }
-    items = _list_current_positions()
+    items = _list_current_positions(asset_type="stock")
     currency_context = _resolve_currency_context(items)
     display_currency = currency_context["display_currency"]
     enriched = _enrich_positions(items, display_currency=display_currency)
@@ -218,18 +243,23 @@ def _resolve_currency_context(items: list[dict]) -> dict:
     }
 
 
-def _list_current_positions(symbol: str | None = None) -> list[dict]:
+def _list_current_positions(symbol: str | None = None, asset_type: str = "all") -> list[dict]:
     if _raw_repository is None:
         return []
     scoped_rows = _get_current_position_snapshot_rows()
     current_rows = _select_current_position_rows(scoped_rows)
     current_rows = _decorate_position_metrics(current_rows)
+    if asset_type == "stock":
+        current_rows = [row for row in current_rows if not is_option(row)]
+    elif asset_type == "option":
+        current_rows = [row for row in current_rows if is_option(row)]
     if symbol:
         normalized_symbol = symbol.upper()
         current_rows = [
             row
             for row in current_rows
             if str(row.get("symbol", "") or "").upper() == normalized_symbol
+            or str(row.get("underlying", "") or "").upper() == normalized_symbol
         ]
     current_rows.sort(
         key=lambda row: abs(
@@ -304,10 +334,11 @@ def _select_current_position_rows(rows: list[dict]) -> list[dict]:
             reverse=True,
         ):
             symbol = str(row.get("symbol", "") or "").upper()
-            if not symbol or symbol in by_symbol:
+            identity = _position_identity(row)
+            if not symbol or identity in by_symbol:
                 continue
             row["symbol"] = symbol
-            by_symbol[symbol] = row
+            by_symbol[identity] = row
         return list(by_symbol.values())
 
     aggregated: dict[str, dict] = {}
@@ -315,14 +346,21 @@ def _select_current_position_rows(rows: list[dict]) -> list[dict]:
         symbol = str(row.get("symbol", "") or "").upper()
         if not symbol:
             continue
+        identity = _position_identity(row)
         bucket = aggregated.setdefault(
-            symbol,
+            identity,
             {
                 "account_id": row.get("account_id"),
                 "report_date": row.get("report_date"),
                 "asset_category": row.get("asset_category"),
                 "symbol": symbol,
                 "currency": row.get("currency"),
+                "expiry": row.get("expiry"),
+                "strike": row.get("strike"),
+                "put_call": row.get("put_call"),
+                "multiplier": row.get("multiplier"),
+                "underlying": row.get("underlying"),
+                "conid": row.get("conid"),
                 "fx_rate_to_base": row.get("fx_rate_to_base", row.get("fxRateToBase")),
                 "level_of_detail": "SUMMARY_AGGREGATED",
                 "quantity": 0.0,
@@ -770,7 +808,8 @@ def _enrich_positions(items: list[dict], *, display_currency: str) -> list[dict]
         quantity = float(pos.get("quantity", 0) or 0)
         pos["report_date_iso"] = normalize_date_to_iso(pos.get("report_date"))
 
-        if _quote_service and sym:
+        option_position = is_option(pos)
+        if _quote_service and sym and not option_position:
             cached = quote_cache.get(sym)
             if cached is None:
                 quote = (
@@ -788,7 +827,7 @@ def _enrich_positions(items: list[dict], *, display_currency: str) -> list[dict]
         else:
             snapshot_price = float(pos.get("mark_price_snapshot", 0) or 0)
             pos["realtime_price"] = snapshot_price
-            pos["realtime_value"] = round(snapshot_price * quantity, 2)
+            pos["realtime_value"] = float(pos.get("market_value_snapshot", snapshot_price * quantity) or 0)
             pos["is_realtime"] = False
             pos["quote_source"] = "snapshot"
         previous_price = _optional_float(pos.get("previous_mark_price_snapshot"))
@@ -814,3 +853,23 @@ def _enrich_positions(items: list[dict], *, display_currency: str) -> list[dict]
 
         enriched.append(pos)
     return enriched
+
+
+def _position_identity(row: dict) -> str:
+    if is_option(row):
+        return ":".join(
+            str(row.get(key) or "").upper()
+            for key in ("asset_category", "symbol", "expiry", "strike", "put_call", "conid")
+        )
+    return str(row.get("symbol") or "").upper()
+
+
+def _option_response_meta(rows: list[dict], asset_type: str) -> dict:
+    if asset_type != "option":
+        return {}
+    snapshot_date, is_stale = snapshot_freshness(rows, timezone_name=_settings_service.get().timezone)
+    return {
+        "summary": option_summary(rows),
+        "snapshot_date": snapshot_date,
+        "is_stale": is_stale,
+    }

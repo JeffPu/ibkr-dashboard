@@ -5017,6 +5017,10 @@ input[type="file"] {
     transform: none;
   }
 
+  .app-shell--sidebar-hidden .sidebar {
+    display: none;
+  }
+
   .brand-lockup {
     padding: 0;
     min-width: 0;
@@ -5359,5 +5363,114 @@ input[type="file"] {
 
   .position-chart svg {
     height: 300px;
+  }
+}
+
+.option-summary-grid {
+  margin-bottom: 16px;
+}
+
+.option-contract-cell {
+  display: grid;
+  gap: 3px;
+  min-width: 210px;
+}
+
+.option-contract-cell small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.option-contract-cell span,
+.option-short-label {
+  color: #b13a32;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.option-short-label {
+  display: block;
+}
+
+.option-snapshot-note {
+  margin: 8px 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.option-snapshot-note--stale {
+  color: #a05a16;
+  font-weight: 700;
+}
+
+.option-expiry-badge {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #eef2f0;
+  color: #46505a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.option-expiry-badge--watch { background: #fff0e5; color: #a05a16; }
+.option-expiry-badge--warning { background: #ffe1dc; color: #b13a32; }
+.option-expiry-badge--urgent,
+.option-expiry-badge--expired { background: #b13a32; color: #fff; }
+
+.option-alert-surface {
+  margin-bottom: 18px;
+}
+
+.option-alert-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.option-alert-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-left: 4px solid #a05a16;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fff8f1;
+}
+
+.option-alert-item div {
+  display: grid;
+  gap: 3px;
+}
+
+.option-alert-item small {
+  color: var(--text-muted);
+}
+
+.option-alert-item > span {
+  color: #a05a16;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.option-alert-item--urgent,
+.option-alert-item--expired { border-left-color: #b13a32; background: #fff0ee; }
+.option-alert-item--urgent > span,
+.option-alert-item--expired > span { color: #b13a32; }
+
+@media (max-width: 720px) {
+  .positions-table-surface .toolbar,
+  .option-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .option-alert-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .option-alert-item > span {
+    white-space: normal;
   }
 }

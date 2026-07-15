@@ -8,6 +8,7 @@ from app.repositories.raw_repository import RawRepository
 from app.services.account_currency import resolve_activity_display_currency
 from app.services.settings_service import SettingsService
 from app.services.trade_aggregation import build_monthly_trade_stats
+from app.services.option_expiration import contract_key, contract_title, is_option
 
 router = APIRouter()
 _raw_repository: RawRepository | object | None = None
@@ -27,6 +28,7 @@ def set_settings_service(service: SettingsService) -> None:
 @router.get("/api/trades", responses=STORAGE_UNAVAILABLE_OPENAPI_RESPONSE)
 def list_trades(
     symbol: str | None = None,
+    asset_type: str = "all",
     side: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -35,6 +37,9 @@ def list_trades(
 ) -> dict:
     normalized_side = side.upper() if side else None
     normalized_symbol = symbol.upper() if symbol else None
+    normalized_asset_type = asset_type.lower()
+    if normalized_asset_type not in {"all", "stock", "option"}:
+        raise HTTPException(status_code=400, detail="invalid_asset_type")
     if normalized_side is not None and normalized_side not in {"BUY", "SELL"}:
         raise HTTPException(status_code=400, detail="invalid_side")
     start_date_iso = normalize_date_to_iso(start_date) if start_date else None
@@ -52,6 +57,7 @@ def list_trades(
         return {
             "filters": {
                 "symbol": normalized_symbol,
+                "asset_type": normalized_asset_type,
                 "side": normalized_side,
                 "start_date": start_date,
                 "end_date": end_date,
@@ -77,8 +83,6 @@ def list_trades(
             "monthly_stats": [],
         }
     filters: dict[str, str] = {}
-    if normalized_symbol:
-        filters["symbol"] = normalized_symbol
     if normalized_side:
         filters["side"] = normalized_side
     scoped_account_id = _resolve_default_account_id()
@@ -91,6 +95,13 @@ def list_trades(
     )
     all_filtered = []
     for item in candidates:
+        option_trade = is_option(item) or bool(item.get("put_call"))
+        if normalized_asset_type == "option" and not option_trade:
+            continue
+        if normalized_asset_type == "stock" and option_trade:
+            continue
+        if normalized_symbol and not _trade_matches_symbol(item, normalized_symbol):
+            continue
         trade_date_iso = normalize_date_to_iso(item.get("trade_date"))
         if start_date_iso and trade_date_iso and trade_date_iso < start_date_iso:
             continue
@@ -125,6 +136,7 @@ def list_trades(
     return {
         "filters": {
             "symbol": normalized_symbol,
+            "asset_type": normalized_asset_type,
             "side": normalized_side,
             "start_date": start_date,
             "end_date": end_date,
@@ -211,7 +223,20 @@ def _enrich_trade_item(item: dict) -> dict:
     enriched["notional_abs"] = notional_abs
     enriched["notional_signed"] = notional_signed
     enriched["notional_currency"] = currency
+    if is_option(enriched) or enriched.get("put_call"):
+        enriched["underlying_symbol"] = str(
+            enriched.get("underlying_symbol") or enriched.get("underlying") or ""
+        ).upper()
+        enriched["raw_contract_code"] = str(enriched.get("symbol") or "")
+        enriched["contract_key"] = contract_key(enriched)
+        enriched["contract_title"] = contract_title(enriched)
     return enriched
+
+
+def _trade_matches_symbol(item: dict, query: str) -> bool:
+    raw_symbol = str(item.get("symbol") or "").upper()
+    underlying = str(item.get("underlying_symbol") or item.get("underlying") or "").upper()
+    return query == raw_symbol or query == underlying
 
 
 def _resolve_default_account_id() -> str | None:

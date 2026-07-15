@@ -50,6 +50,11 @@ class HttpElasticsearchClient:
             raise RuntimeError(f"failed to fetch {index}/{id}: {response.status_code}")
         return response.json()
 
+    def delete(self, *, index: str, id: str) -> None:
+        response = self._client.delete(f"/{index}/_doc/{id}")
+        if response.status_code not in (200, 404):
+            raise RuntimeError(f"failed to delete {index}/{id}: {response.status_code}")
+
     def search(
         self,
         *,

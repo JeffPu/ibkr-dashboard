@@ -6,6 +6,8 @@ class ElasticsearchLike(Protocol):
 
     def get(self, *, index: str, id: str) -> dict[str, Any]: ...
 
+    def delete(self, *, index: str, id: str) -> None: ...
+
     def search(
         self,
         *,

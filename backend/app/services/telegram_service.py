@@ -9,6 +9,7 @@ from app.services.ai_narrative_service import build_ai_provider
 from app.services.market_data_provider import MarketDataProvider
 from app.services.portfolio_analysis_service import PortfolioAnalysisService
 from app.services.settings_service import SettingsService
+from app.services.option_expiration import build_expiration_alerts
 from app.utils.numbers import first_number
 from app.utils.numbers import positive_float_or_none
 from app.utils.numbers import to_float as _to_float
@@ -104,6 +105,7 @@ class TelegramCommandService:
 
     def build_daily_report_message(self) -> tuple[str, str]:
         analysis = self._analysis_service.get_analysis()
+        expiration_text = self._option_expiration_report()
         return (
             (
                 "持仓分析日报："
@@ -111,9 +113,45 @@ class TelegramCommandService:
                 f"市场={_status_label(analysis.sections.market.status.value)}；"
                 f"组合={_status_label(analysis.sections.portfolio.status.value)}；"
                 f"个股={_status_label(analysis.sections.stock.status.value)}"
+                f"{expiration_text}"
             ),
             analysis.status.value,
         )
+
+    def _option_expiration_report(self) -> str:
+        if self._raw_repository is None:
+            return ""
+        latest = self._raw_repository.get_latest_account_snapshot()
+        if not latest:
+            return ""
+        rows = self._raw_repository.es.search(
+            index="ibkr_position_snapshots_v1",
+            size=10000,
+            term_filters={
+                "account_id": str(latest.get("account_id") or ""),
+                "report_date": str(latest.get("report_date") or ""),
+            },
+        )
+        alerts = build_expiration_alerts(
+            rows,
+            timezone_name=self._settings_service.get().timezone,
+            limit=10,
+        )
+        if not alerts["items"]:
+            return "\n\n期权到期提醒：暂无近期或待核对持仓"
+        lines = ["\n\n期权到期提醒："]
+        if alerts["is_stale"]:
+            lines.append(f"数据可能过期（快照 {alerts['snapshot_date']}）")
+        for item in alerts["items"]:
+            days = int(item["days_to_expiry"])
+            remaining = "已到期 · 待核对" if days < 0 else f"剩余 {days} 天"
+            side = " · 卖方持仓" if item["is_short"] else ""
+            lines.append(
+                f"- {item['contract_title']} · {remaining}{side} · 快照 {item['snapshot_date']}"
+            )
+        if alerts["remaining_count"]:
+            lines.append(f"另有 {alerts['remaining_count']} 个，请到看板查看")
+        return "\n".join(lines)
 
     def deliver_daily_report(self, delivery_service: TelegramDeliveryService) -> dict[str, object]:
         settings = self._settings_service.get()

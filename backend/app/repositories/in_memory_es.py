@@ -14,6 +14,9 @@ class InMemoryElasticsearchClient:
             raise KeyError(f"document not found: {index}/{id}")
         return {"_source": dict(self.storage[key])}
 
+    def delete(self, *, index: str, id: str) -> None:
+        self.storage.pop((index, id), None)
+
     def search(
         self,
         *,
