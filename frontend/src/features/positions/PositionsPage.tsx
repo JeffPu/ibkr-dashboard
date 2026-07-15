@@ -35,6 +35,7 @@ interface PositionData {
   positions: PositionsResponse | null;
   options: PositionsResponse | null;
   allPositions: PositionsResponse | null;
+  allOptions: PositionsResponse | null;
   industry: ApiRecord | null;
   industryMappings: ApiRecord | null;
   overview: ApiRecord | null;
@@ -82,15 +83,16 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
   const [mappingMessage, setMappingMessage] = useState<string | null>(null);
   const [copiedContractCode, setCopiedContractCode] = useState("");
   const { state, load } = useApiData<PositionData>(async () => {
-    const [positions, options, allPositions, industry, overview, industryMappings] = await Promise.all([
+    const [positions, options, allPositions, allOptions, industry, overview, industryMappings] = await Promise.all([
       api.positions(query),
       api.positions(optionQuery),
       api.positions({ asset_type: "stock", page: 1, page_size: 100 }),
+      api.positions({ asset_type: "option", page: 1, page_size: 100 }),
       api.industryAllocation(),
       api.overview(),
       api.industryMappings(),
     ]);
-    return { positions, options, allPositions, industry, overview, industryMappings };
+    return { positions, options, allPositions, allOptions, industry, overview, industryMappings };
   }, [query, optionQuery]);
 
   useEffect(() => {
@@ -111,11 +113,13 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
 
   const positionData = state.data;
   const currency = asText(positionData?.positions?.display_currency, "USD");
-  const rows = useMemo(
-    () => sortRecords(asArray(positionData?.positions?.items), sortKey, sortDir),
-    [positionData?.positions, sortKey, sortDir],
-  );
   const allRows = useMemo(() => asArray(positionData?.allPositions?.items), [positionData?.allPositions]);
+  const rows = useMemo(() => {
+    const sourceRows = query.symbol
+      ? allRows.filter((row) => asText(row.symbol, "").toUpperCase() === query.symbol)
+      : asArray(positionData?.positions?.items);
+    return sortRecords(sourceRows, sortKey, sortDir);
+  }, [allRows, positionData?.positions, query.symbol, sortKey, sortDir]);
   const total = asNumber(positionData?.positions?.total, rows.length);
   const optionRows = asArray(positionData?.options?.items);
   const optionTotal = asNumber(positionData?.options?.total, optionRows.length);
@@ -129,6 +133,10 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
   const rowSymbols = useMemo(
     () => Array.from(new Set(allRows.map((row) => asText(row.symbol, "").toUpperCase()).filter(Boolean))).sort(),
     [allRows],
+  );
+  const optionSymbols = useMemo(
+    () => Array.from(new Set(asArray(positionData?.allOptions?.items).map((row) => asText(row.underlying_symbol ?? row.underlying, "").toUpperCase()).filter(Boolean))).sort(),
+    [positionData?.allOptions],
   );
   const holdingPieRows = useMemo(() => {
     const holdings = allRows
@@ -355,7 +363,6 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
               ))}
             </select>
           </Field>
-          <button type="button" onClick={load}>查询</button>
         </Toolbar>
         <DataTable
           rows={rows}
@@ -419,7 +426,7 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
           <div className="metric-grid metric-grid--compact option-summary-grid">
             <MetricCard label="期权净市值" value={formatCurrency(optionSummary.option_net_market_value, currency)} />
             <MetricCard label="期权未实现盈亏" value={<DeltaText value={optionSummary.option_unrealized_pnl} currency={currency} />} tone={deltaClass(optionSummary.option_unrealized_pnl)} />
-            <MetricCard label="30 天内到期持仓" value={`${formatNumber(optionSummary.expiring_30_contracts, 0)}（空仓 ${formatNumber(optionSummary.expiring_30_short_contracts, 0)}）`} />
+            <MetricCard label="30 天内到期持仓" value={formatNumber(optionSummary.expiring_30_contracts, 0)} />
           </div>
         ) : null}
         {optionTotal === 0 && optionQuery.symbol === "" && optionQuery.expiry_status === "all" ? (
@@ -427,11 +434,10 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
         ) : <>
           <Toolbar>
             <Field label="标的代码">
-              <input
-                value={optionQuery.symbol}
-                placeholder="如 AAPL"
-                onChange={(event) => setOptionQuery({ ...optionQuery, symbol: event.target.value.toUpperCase(), page: 1 })}
-              />
+              <select value={optionQuery.symbol} onChange={(event) => setOptionQuery({ ...optionQuery, symbol: event.target.value, page: 1 })}>
+                <option value="">全部</option>
+                {optionSymbols.map((symbol) => <option value={symbol} key={symbol}>{symbol}</option>)}
+              </select>
             </Field>
             <Field label="到期状态">
               <select value={optionQuery.expiry_status} onChange={(event) => setOptionQuery({ ...optionQuery, expiry_status: event.target.value as ExpiryFilter, page: 1 })}>
@@ -453,10 +459,23 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
           columns={[
             { key: "contract_title", label: "合约", render: (row) => {
               const code = asText(row.raw_contract_code ?? row.symbol);
-              return <div className="option-contract-cell"><strong>{asText(row.contract_title)}</strong><small>{code}</small><button type="button" className="option-contract-copy" onClick={() => { void copyContractCode(code).then((copied) => copied && setCopiedContractCode(code)); }}>{copiedContractCode === code ? "已复制" : "复制原始合约代码"}</button>{asText(row.contract_data_status) === "incomplete" ? <span>合约数据不完整</span> : null}</div>;
+              return (
+                <div className="option-contract-cell">
+                  <div className="option-contract-title">
+                    <strong>{asText(row.contract_title)}</strong>
+                    <div className="option-contract-actions">
+                      {row.is_short ? <span className="option-short-label">卖方持仓</span> : null}
+                      <button type="button" className="option-contract-copy" onClick={() => { void copyContractCode(code).then((copied) => copied && setCopiedContractCode(code)); }}>
+                        {copiedContractCode === code ? "已复制" : "复制合约代码"}
+                      </button>
+                    </div>
+                  </div>
+                  {asText(row.contract_data_status) === "incomplete" ? <span>合约数据不完整</span> : null}
+                </div>
+              );
             } },
             { key: "days_to_expiry", label: "到期状态", render: (row) => <OptionExpiryBadge row={row} /> },
-            { key: "quantity", label: "数量", align: "right", render: (row) => <>{formatNumber(row.quantity, 0)}{row.is_short ? <small className="option-short-label">卖方持仓</small> : null}</> },
+            { key: "quantity", label: "数量", align: "right", render: (row) => formatNumber(row.quantity, 0) },
             { key: "multiplier", label: "乘数", align: "right", render: (row) => formatNumber(row.multiplier, 0) },
             { key: "average_cost_price", label: "均价", align: "right", render: (row) => formatCurrency(row.average_cost_price, asText(row.currency, currency)) },
             { key: "mark_price_snapshot", label: "Flex 标记价", align: "right", render: (row) => formatCurrency(row.mark_price_snapshot, asText(row.currency, currency)) },
@@ -467,6 +486,7 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
         />
         {optionTotal > 0 ? (
           <PaginationFooter
+            className="table-footer"
             page={optionQuery.page}
             pageSize={optionQuery.page_size}
             total={optionTotal}

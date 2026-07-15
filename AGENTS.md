@@ -104,3 +104,17 @@
   `frontend/src/features/portfolio-analysis/PortfolioAnalysisPage.tsx`。
 - 涉及设置项的改动：同时检查 `settings_service.py`、`settings_repository.py`、`routes/settings.py`、`frontend/src/features/settings/SettingsPage.tsx` 和 `SettingsResponse` 类型。
 - 完成修改前按风险等级运行对应验证；跨层或交付前使用 `npm run verify`，不要只凭静态阅读宣称完成。
+
+## Agent skills
+
+### Issue tracker
+
+Issues 在 GitHub Issues 管理。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用默认五个 triage labels。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+使用 single-context 布局。见 `docs/agents/domain.md`。
