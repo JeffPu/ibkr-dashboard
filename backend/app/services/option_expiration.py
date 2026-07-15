@@ -13,6 +13,11 @@ def is_option(row: dict) -> bool:
     return str(row.get("asset_category") or "").upper() in OPTION_ASSET_CATEGORIES
 
 
+def is_stock(row: dict) -> bool:
+    """Treat legacy rows without a category as stocks, but exclude known non-stock assets."""
+    return str(row.get("asset_category") or "").upper() in {"", "STK"}
+
+
 def contract_key(row: dict) -> str:
     category = str(row.get("asset_category") or "OPT").upper()
     symbol = str(row.get("symbol") or "").upper()
@@ -92,7 +97,7 @@ def matches_expiry_filter(row: dict, expiry_status: str) -> bool:
 def sort_options(rows: list[dict], *, alerts_only: bool = False) -> list[dict]:
     def key(row: dict) -> tuple:
         days = row.get("days_to_expiry")
-        incomplete = days is None
+        incomplete = row.get("contract_data_status") != "complete"
         expired_rank = 0 if isinstance(days, int) and days < 0 and alerts_only else 1
         expiry = normalize_date_to_iso(row.get("expiry")) or "9999-12-31"
         return (incomplete, expired_rank, expiry, 0 if row.get("is_short") else 1, row.get("contract_key", ""))
@@ -138,7 +143,19 @@ def build_expiration_alerts(rows: list[dict], *, timezone_name: str, limit: int)
         and isinstance(row.get("days_to_expiry"), int)
         and int(row["days_to_expiry"]) <= 30
     ]
-    alerts = sort_options(alerts, alerts_only=True)
+    alerts_by_contract: dict[str, dict] = {}
+    for row in alerts:
+        key = str(row["contract_key"])
+        existing = alerts_by_contract.get(key)
+        if existing is None:
+            alerts_by_contract[key] = row
+            continue
+        net_quantity = to_float(existing.get("quantity", existing.get("position"))) + to_float(
+            row.get("quantity", row.get("position"))
+        )
+        existing["quantity"] = net_quantity
+        existing["is_short"] = net_quantity < 0
+    alerts = sort_options(list(alerts_by_contract.values()), alerts_only=True)
     snapshot_date, is_stale = snapshot_freshness(decorated, timezone_name=timezone_name)
     items = []
     for row in alerts[:limit]:
@@ -161,4 +178,7 @@ def build_expiration_alerts(rows: list[dict], *, timezone_name: str, limit: int)
         "remaining_count": max(0, len(alerts) - len(items)),
         "snapshot_date": snapshot_date,
         "is_stale": is_stale,
+        "source": "ibkr_flex_xml",
+        "updated_at": snapshot_date,
+        "missing_reason": None if alerts else "no_expiring_option_positions",
     }

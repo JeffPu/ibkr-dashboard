@@ -81,6 +81,9 @@ def list_trades(
                 "currency_count": 0,
             },
             "monthly_stats": [],
+            "source": "ibkr_flex_xml",
+            "updated_at": None,
+            "missing_reason": "storage_unavailable",
         }
     filters: dict[str, str] = {}
     if normalized_side:
@@ -148,6 +151,9 @@ def list_trades(
         "display_currency": display_currency,
         "summary": summary,
         "monthly_stats": monthly_stats,
+        "source": "ibkr_flex_xml",
+        "updated_at": all_filtered[0].get("trade_date_iso") if all_filtered else None,
+        "missing_reason": None if all_filtered else "no_matching_trades",
     }
 
 

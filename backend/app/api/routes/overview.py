@@ -23,7 +23,7 @@ from app.services.overview_risk_service import position_market_value as _positio
 from app.services.overview_risk_service import position_quantity as _position_quantity
 from app.services.quote_service import QuoteService
 from app.services.settings_service import SettingsService
-from app.services.option_expiration import build_expiration_alerts, is_option
+from app.services.option_expiration import build_expiration_alerts, contract_key, is_option, is_stock
 from app.utils.dates import parse_iso_date as _parse_iso_date
 from app.utils.numbers import to_float as _to_float
 
@@ -839,9 +839,14 @@ def _history_returns(points: list[dict], *, window: int) -> dict[str, float]:
     return returns
 
 
-def _compute_beta(symbol_returns: dict[str, float], benchmark_returns: dict[str, float]) -> tuple[float | None, int, str]:
+def _compute_beta(
+    symbol_returns: dict[str, float],
+    benchmark_returns: dict[str, float],
+    *,
+    minimum_observations: int,
+) -> tuple[float | None, int, str]:
     common_dates = sorted(set(symbol_returns) & set(benchmark_returns))
-    if len(common_dates) < 2:
+    if len(common_dates) < minimum_observations:
         return None, len(common_dates), "insufficient_overlapping_history"
     xs = [benchmark_returns[date_key] for date_key in common_dates]
     ys = [symbol_returns[date_key] for date_key in common_dates]
@@ -926,7 +931,7 @@ def get_overview_risk_warning(
     report_date = str(latest.get("report_date", "") or "")
     account_base_currency = _normalize_currency_code(latest.get("base_currency"), "USD")
     display_currency = _settings_service.get().base_currency
-    current_positions, all_positions = _load_latest_position_rows(_raw_repository, account_id, report_date)
+    current_positions, _ = _load_latest_position_rows(_raw_repository, account_id, report_date)
     if not current_positions:
         return _empty_risk_warning(selected_benchmark, beta_window, "missing_position_snapshots")
     current_positions = _convert_position_rows(
@@ -934,12 +939,6 @@ def get_overview_risk_warning(
         account_base_currency=account_base_currency,
         display_currency=account_base_currency,
     )
-    all_positions = _convert_position_rows(
-        all_positions,
-        account_base_currency=account_base_currency,
-        display_currency=account_base_currency,
-    )
-
     currency_conversion = _resolve_display_fx(
         raw_repository=_raw_repository,
         source_currency=account_base_currency,
@@ -953,7 +952,7 @@ def get_overview_risk_warning(
             "market_value": abs(_convert_money(_position_market_value(position), fx_rate)),
         }
         for position in current_positions
-        if not is_option(position)
+        if is_stock(position)
         if str(position.get("symbol", "") or "").strip()
     ]
     total_market_value = round(sum(item["market_value"] for item in position_values), 2)
@@ -1018,6 +1017,7 @@ def get_overview_risk_warning(
             beta, observations, reason = _compute_beta(
                 returns_by_symbol.get(symbol, {}),
                 benchmark_returns,
+                minimum_observations=beta_window,
             )
             beta_results.append((item, beta, observations, reason))
         eligible_market_value = sum(item["market_value"] for item, beta, _observations, _reason in beta_results if beta is not None)
@@ -1195,14 +1195,7 @@ def get_overview() -> dict:
             symbol = str(p.get("symbol", "") or "")
             if not symbol:
                 continue
-            identity = (
-                ":".join(
-                    str(p.get(key) or "").upper()
-                    for key in ("asset_category", "symbol", "expiry", "strike", "put_call", "conid")
-                )
-                if is_option(p)
-                else symbol
-            )
+            identity = contract_key(p) if is_option(p) else symbol
             bucket = aggregated.setdefault(
                 identity,
                 {
@@ -1260,7 +1253,7 @@ def get_overview() -> dict:
             position.get("market_value_snapshot", position.get("position_value", 0)) or 0
         )
         avg_cost = float(position.get("average_cost_price", position.get("cost_basis_price", 0)) or 0)
-        if _quote_service is not None and symbol and not is_option(position):
+        if _quote_service is not None and symbol and is_stock(position):
             cached = quote_cache.get(symbol)
             if cached is None:
                 quote = (

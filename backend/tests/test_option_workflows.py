@@ -15,7 +15,7 @@ def _compact(day: datetime) -> str:
     return day.strftime("%Y%m%d")
 
 
-def _option_xml(*, option_count: int = 6) -> str:
+def _option_xml(*, option_count: int = 6, include_future: bool = False) -> str:
     today = datetime.now(ZoneInfo("Asia/Shanghai"))
     report_date = _compact(today)
     offsets = [-1, 1, 7, 30, 45]
@@ -38,17 +38,24 @@ def _option_xml(*, option_count: int = 6) -> str:
             f'<Trade accountId="UOPT" tradeID="opt-{index}" assetCategory="OPT" symbol="{raw_symbol}" '
             f'underlyingSymbol="AAPL" buySell="BUY" quantity="1" tradePrice="{10 + index}" '
             f'tradeDate="{report_date}" currency="USD" expiry="{expiry}" strike="{200 + index}" '
-            f'putCall="{right}" multiplier="100" openCloseIndicator="O" transactionType="Trade" notes="opening option" />'
+            f'putCall="{right}" multiplier="100" openCloseIndicator="O" transactionType="Trade" '
+            f'notes="{"Assignment" if index == 0 else "opening option"}" />'
         )
     options.append(
         f'<OpenPosition accountId="UOPT" currency="USD" assetCategory="FOP" symbol="INCOMPLETE-1" '
         f'underlyingSymbol="ES" reportDate="{report_date}" position="1" markPrice="5" positionValue="250" '
         'costBasisMoney="200" fifoPnlUnrealized="50" conid="900001" levelOfDetail="SUMMARY" />'
     )
+    future_position = (
+        f'<OpenPosition accountId="UOPT" currency="USD" assetCategory="FUT" symbol="ES" reportDate="{report_date}" '
+        'position="1" markPrice="5000" positionValue="5000" levelOfDetail="SUMMARY" />'
+        if include_future else ""
+    )
     return f"""<FlexQueryResponse><FlexStatements><FlexStatement accountId="UOPT">
       <EquitySummaryInBase><EquitySummaryByReportDateInBase accountId="UOPT" currency="USD" reportDate="{report_date}" cash="-200" stock="1000" total="1000" /></EquitySummaryInBase>
       <OpenPositions>
         <OpenPosition accountId="UOPT" currency="USD" assetCategory="STK" symbol="MSFT" reportDate="{report_date}" position="5" markPrice="200" positionValue="1000" costBasisMoney="900" fifoPnlUnrealized="100" levelOfDetail="SUMMARY" />
+        {future_position}
         {''.join(options)}
       </OpenPositions>
       <Trades>
@@ -88,7 +95,7 @@ def _import_xml(client: TestClient, xml: str) -> None:
 def test_option_positions_are_distinct_filtered_and_summarized_before_pagination() -> None:
     _configure_routes()
     with TestClient(app) as client:
-        xml = _option_xml()
+        xml = _option_xml(include_future=True)
         _import_xml(client, xml)
         _import_xml(client, xml)
         _import_xml(client, xml.replace('strike="200"', 'strike="260"'))
@@ -112,12 +119,18 @@ def test_option_positions_are_distinct_filtered_and_summarized_before_pagination
         finally:
             positions_route.set_quote_service(None)
         industry = client.get("/api/positions/industry-allocation").json()
+        _import_xml(
+            client,
+            f'<root><EquitySummaryByReportDateInBase accountId="UOPT" currency="USD" reportDate="{_compact(datetime.now(ZoneInfo("Asia/Shanghai")))}" cash="1000" stock="0" total="1000" /></root>',
+        )
+        cleared = client.get("/api/positions", params={"asset_type": "option"}).json()
 
     assert stock["total"] == 1
     assert stock["items"][0]["symbol"] == "MSFT"
     assert options["total"] == 7
     assert len(options["items"]) == 3
-    assert all("|200|" not in item["contract_key"] for item in all_options["items"])
+    assert all(":200:" not in item["contract_key"] for item in all_options["items"])
+    assert all_options["items"][-1]["contract_data_status"] == "incomplete"
     assert len({item["contract_key"] for item in options["items"]}) == 3
     assert all(item["asset_category"] in {"OPT", "FOP"} for item in options["items"])
     assert options["summary"] == {
@@ -128,9 +141,13 @@ def test_option_positions_are_distinct_filtered_and_summarized_before_pagination
     }
     assert options["snapshot_date"]
     assert options["is_stale"] is False
+    assert options["source"] == "ibkr_flex_xml"
+    assert options["updated_at"] == options["snapshot_date"]
+    assert options["missing_reason"] is None
     assert {item["days_to_expiry"] for item in within_7["items"]} == {1, 7}
     assert industry["items"][0]["market_value"] == 1000.0
     assert industry["total_market_value"] == 1000.0
+    assert cleared["total"] == 0
 
 
 def test_overview_and_telegram_share_bounded_expiration_alerts() -> None:
@@ -152,6 +169,9 @@ def test_overview_and_telegram_share_bounded_expiration_alerts() -> None:
     assert alerts["remaining_count"] == 6
     assert alerts["items"][0]["expiry_status"] == "expired"
     assert alerts["items"][0]["snapshot_date"]
+    assert alerts["source"] == "ibkr_flex_xml"
+    assert alerts["updated_at"] == alerts["snapshot_date"]
+    assert alerts["missing_reason"] is None
     assert "期权到期提醒" in report["message"]
     assert report["message"].count("\n- ") == 10
     assert "另有 1 个，请到看板查看" in report["message"]
@@ -164,11 +184,15 @@ def test_option_trades_can_be_filtered_and_searched_by_underlying_or_contract() 
         _import_xml(client, xml)
         options = client.get("/api/trades", params={"asset_type": "option", "page_size": 1}).json()
         by_underlying = client.get("/api/trades", params={"asset_type": "option", "symbol": "AAPL"}).json()
-        raw_symbol = by_underlying["items"][0]["symbol"]
+        assignment_trade = next(item for item in by_underlying["items"] if item["notes"] == "Assignment")
+        raw_symbol = assignment_trade["symbol"]
         by_contract = client.get("/api/trades", params={"symbol": raw_symbol}).json()
 
     assert options["total"] == 2
     assert options["summary"]["trade_count"] == 2
+    assert options["source"] == "ibkr_flex_xml"
+    assert options["updated_at"]
+    assert options["missing_reason"] is None
     assert by_underlying["total"] == 2
     assert by_contract["total"] == 1
     trade = by_contract["items"][0]
@@ -177,7 +201,7 @@ def test_option_trades_can_be_filtered_and_searched_by_underlying_or_contract() 
     assert trade["contract_title"].startswith("AAPL · ")
     assert trade["open_close_indicator"] == "O"
     assert trade["transaction_type"] == "Trade"
-    assert trade["notes"] == "opening option"
+    assert trade["notes"] == "Assignment"
 
 
 def test_overview_removes_net_exposure_and_uses_signed_all_position_margin_formula() -> None:
@@ -229,7 +253,7 @@ def test_beta_contract_uses_stock_only_renormalizes_and_reports_coverage() -> No
             result.append(result[-1] * (1 + value))
         return result
 
-    market_returns = [0.01, 0.02, -0.01, 0.03]
+    market_returns = [0.01 if index % 3 == 0 else -0.004 if index % 3 == 1 else 0.007 for index in range(60)]
     series = {
         "QQQ": prices(market_returns),
         "^IXIC": prices(market_returns),
@@ -237,7 +261,7 @@ def test_beta_contract_uses_stock_only_renormalizes_and_reports_coverage() -> No
         "AAPL": prices([value * 2 for value in market_returns]),
         "MSFT": [],
     }
-    dates = [(today - timedelta(days=4 - index)).date().isoformat() for index in range(5)]
+    dates = [(today - timedelta(days=60 - index)).date().isoformat() for index in range(61)]
 
     def fake_fetcher(symbol: str, _start: str, _end: str) -> list[dict]:
         return [{"date": day, "value": value, "source": "test"} for day, value in zip(dates, series.get(symbol, []))]

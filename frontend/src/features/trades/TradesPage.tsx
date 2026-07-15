@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../../lib/api";
-import type { ApiRecord } from "../../lib/contracts";
+import type { ApiRecord, TradesResponse } from "../../lib/contracts";
 import { useApiData } from "../../lib/useApiData";
 import {
   asArray,
@@ -62,7 +62,7 @@ export function TradesPage() {
 
 function TradeRecordsPanel() {
   const [query, setQuery] = useState<TradeQuery>({ symbol: "", asset_type: "", side: "", start_date: "", end_date: "", page: 1, page_size: 20 });
-  const { state, load } = useApiData<ApiRecord>(() => api.trades(query), [query]);
+  const { state, load } = useApiData<TradesResponse>(() => api.trades(query), [query]);
 
   return (
     <Surface title="交易流水" className="trades-surface">
@@ -104,7 +104,7 @@ function TradeRecordsContent({
   query,
   setQuery,
 }: {
-  data: ApiRecord;
+  data: TradesResponse;
   query: TradeQuery;
   setQuery: (query: TradeQuery) => void;
 }) {
@@ -296,5 +296,8 @@ function formatOpenClose(value: unknown): string {
 function formatTradeEvent(row: ApiRecord): string {
   const transactionType = asText(row.transaction_type);
   const notes = asText(row.notes);
+  const explicitEvent = `${transactionType} ${notes}`.toLowerCase();
+  if (explicitEvent.includes("assign") || explicitEvent.includes("指派")) return "被指派";
+  if (explicitEvent.includes("exercise") || explicitEvent.includes("行权")) return "行权";
   return transactionType || notes || "-";
 }

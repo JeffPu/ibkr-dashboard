@@ -6,9 +6,11 @@ import type {
   OverviewRiskWarningResponse,
   PortfolioAnalysisResponse,
   PortfolioRefreshJob,
+  PositionsResponse,
   RequestQuery,
   SettingsResponse,
   SettingsUpdatePayload,
+  TradesResponse,
 } from "./contracts";
 
 function buildQuery(query?: RequestQuery): string {
@@ -71,7 +73,7 @@ export const api = {
   overviewBenchmarks: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/overview/benchmarks", query),
   overviewRiskWarning: (query?: RequestQuery) =>
     getJson<OverviewRiskWarningResponse>("/api/overview/risk-warning", query),
-  positions: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/positions", query),
+  positions: (query?: RequestQuery) => getJson<PositionsResponse>("/api/positions", query),
   portfolioAnalysis: (query?: RequestQuery) =>
     getJson<PortfolioAnalysisResponse>("/api/portfolio-analysis", query),
   refreshPortfolioAnalysisNarrative: (query?: RequestQuery) =>
@@ -86,7 +88,7 @@ export const api = {
   deleteIndustryMapping: (symbol: string) =>
     deleteJson<Record<string, unknown>>(`/api/industry-mappings/${encodeURIComponent(symbol)}`),
   performance: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/performance", query),
-  trades: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/trades", query),
+  trades: (query?: RequestQuery) => getJson<TradesResponse>("/api/trades", query),
   cashFlows: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/cash-flows", query),
   settings: () => getJson<SettingsResponse>("/api/settings"),
   aiModels: () => getJson<AiModelCatalogResponse>("/api/settings/ai-models"),

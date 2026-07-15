@@ -87,7 +87,7 @@ class RawRepository:
     def upsert_parsed_data(self, parsed: ParsedXmlData) -> None:
         for record in parsed.account_snapshots:
             self._upsert_record("ibkr_account_snapshots_v1", record.document_id, record)
-        self._reconcile_positions(parsed.positions)
+        self._reconcile_positions(parsed.positions, parsed.account_snapshots)
         for record in parsed.positions:
             self._upsert_record("ibkr_position_snapshots_v1", record.document_id, record)
         for record in parsed.trades:
@@ -107,9 +107,12 @@ class RawRepository:
             doc_as_upsert=True,
         )
 
-    def _reconcile_positions(self, positions: list[object]) -> None:
+    def _reconcile_positions(self, positions: list[object], account_snapshots: list[object]) -> None:
         """Replace each imported account/report snapshot so changed contracts leave no stale rows."""
         current_by_snapshot: dict[tuple[str, str], set[str]] = {}
+        for record in account_snapshots:
+            snapshot = (str(getattr(record, "account_id", "")), str(getattr(record, "report_date", "")))
+            current_by_snapshot.setdefault(snapshot, set())
         for record in positions:
             snapshot = (str(getattr(record, "account_id", "")), str(getattr(record, "report_date", "")))
             current_by_snapshot.setdefault(snapshot, set()).add(str(getattr(record, "document_id", "")))

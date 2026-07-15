@@ -21,7 +21,9 @@ from app.services.account_currency import resolve_account_base_currency as _reso
 from app.services.settings_service import SettingsService
 from app.services.option_expiration import (
     decorate_option,
+    contract_key,
     is_option,
+    is_stock,
     matches_expiry_filter,
     option_summary,
     snapshot_freshness,
@@ -84,6 +86,7 @@ def list_positions(
             "valuation_mode": "realtime" if use_realtime else "snapshot",
             "items": [],
             "total": 0,
+            **_option_response_meta([], normalized_asset_type),
         }
     normalized_page = max(page, 1)
     normalized_page_size = max(min(page_size, 100), 1)
@@ -250,7 +253,7 @@ def _list_current_positions(symbol: str | None = None, asset_type: str = "all") 
     current_rows = _select_current_position_rows(scoped_rows)
     current_rows = _decorate_position_metrics(current_rows)
     if asset_type == "stock":
-        current_rows = [row for row in current_rows if not is_option(row)]
+        current_rows = [row for row in current_rows if is_stock(row)]
     elif asset_type == "option":
         current_rows = [row for row in current_rows if is_option(row)]
     if symbol:
@@ -857,10 +860,7 @@ def _enrich_positions(items: list[dict], *, display_currency: str) -> list[dict]
 
 def _position_identity(row: dict) -> str:
     if is_option(row):
-        return ":".join(
-            str(row.get(key) or "").upper()
-            for key in ("asset_category", "symbol", "expiry", "strike", "put_call", "conid")
-        )
+        return contract_key(row)
     return str(row.get("symbol") or "").upper()
 
 
@@ -872,4 +872,7 @@ def _option_response_meta(rows: list[dict], asset_type: str) -> dict:
         "summary": option_summary(rows),
         "snapshot_date": snapshot_date,
         "is_stale": is_stale,
+        "source": "ibkr_flex_xml",
+        "updated_at": snapshot_date,
+        "missing_reason": None if rows else "no_matching_option_positions",
     }

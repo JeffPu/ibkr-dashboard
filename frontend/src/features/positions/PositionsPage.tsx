@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, WheelEvent } from "react";
 import { api } from "../../lib/api";
-import type { ApiRecord } from "../../lib/contracts";
+import type { ApiRecord, PositionsResponse } from "../../lib/contracts";
 import {
   asArray,
   asNumber,
@@ -32,9 +32,9 @@ import {
 import { useApiData } from "../../lib/useApiData";
 
 interface PositionData {
-  positions: ApiRecord | null;
-  options: ApiRecord | null;
-  allPositions: ApiRecord | null;
+  positions: PositionsResponse | null;
+  options: PositionsResponse | null;
+  allPositions: PositionsResponse | null;
   industry: ApiRecord | null;
   industryMappings: ApiRecord | null;
   overview: ApiRecord | null;
@@ -64,6 +64,7 @@ const PIE_COLORS = [
 type ExpiryFilter = "all" | "within_30" | "within_7" | "expired";
 
 export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFilter?: ExpiryFilter }) {
+  const optionSectionRef = useRef<HTMLDivElement | null>(null);
   const [query, setQuery] = useState({ symbol: "", asset_type: "stock", page: 1, page_size: 20 });
   const [optionQuery, setOptionQuery] = useState({ symbol: "", asset_type: "option", expiry_status: initialExpiryFilter, page: 1, page_size: 20 });
   const [sortKey, setSortKey] = useState("realtime_value");
@@ -79,6 +80,7 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
   const [mappingDraft, setMappingDraft] = useState({ symbol: "", industry: "" });
   const [mappingSaving, setMappingSaving] = useState(false);
   const [mappingMessage, setMappingMessage] = useState<string | null>(null);
+  const [copiedContractCode, setCopiedContractCode] = useState("");
   const { state, load } = useApiData<PositionData>(async () => {
     const [positions, options, allPositions, industry, overview, industryMappings] = await Promise.all([
       api.positions(query),
@@ -100,6 +102,12 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
       return stillVisible ?? allLoadedRows[0];
     });
   }, [state.data?.allPositions]);
+
+  useEffect(() => {
+    if (initialExpiryFilter !== "all") {
+      optionSectionRef.current?.scrollIntoView({ block: "start" });
+    }
+  }, [initialExpiryFilter]);
 
   const positionData = state.data;
   const currency = asText(positionData?.positions?.display_currency, "USD");
@@ -287,7 +295,6 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
         <Surface title="持仓汇总" className="positions-chart-surface positions-chart-surface--holdings">
           <PieChart
             rows={holdingPieRows}
-            totalOverride={equity}
             emptyTitle="暂无持仓汇总"
             emptyDetail="导入最新持仓快照后显示股票与现金占比。"
           />
@@ -406,6 +413,7 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
         />
       </Surface>
 
+      <div ref={optionSectionRef} className="option-section-anchor">
       <Surface title="期权持仓" className="positions-table-surface" >
         {optionTotal > 0 ? (
           <div className="metric-grid metric-grid--compact option-summary-grid">
@@ -414,23 +422,26 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
             <MetricCard label="30 天内到期持仓" value={`${formatNumber(optionSummary.expiring_30_contracts, 0)}（空仓 ${formatNumber(optionSummary.expiring_30_short_contracts, 0)}）`} />
           </div>
         ) : null}
-        <Toolbar>
-          <Field label="标的代码">
-            <input
-              value={optionQuery.symbol}
-              placeholder="如 AAPL"
-              onChange={(event) => setOptionQuery({ ...optionQuery, symbol: event.target.value.toUpperCase(), page: 1 })}
-            />
-          </Field>
-          <Field label="到期状态">
-            <select value={optionQuery.expiry_status} onChange={(event) => setOptionQuery({ ...optionQuery, expiry_status: event.target.value as ExpiryFilter, page: 1 })}>
-              <option value="all">全部</option>
-              <option value="within_30">30 天内</option>
-              <option value="within_7">7 天内</option>
-              <option value="expired">已到期 · 待核对</option>
-            </select>
-          </Field>
-        </Toolbar>
+        {optionTotal === 0 && optionQuery.symbol === "" && optionQuery.expiry_status === "all" ? (
+          <div className="empty-state empty-state--compact"><strong>暂无期权持仓</strong><span>导入包含 OPT 或 FOP 的 Flex 持仓后显示。</span></div>
+        ) : <>
+          <Toolbar>
+            <Field label="标的代码">
+              <input
+                value={optionQuery.symbol}
+                placeholder="如 AAPL"
+                onChange={(event) => setOptionQuery({ ...optionQuery, symbol: event.target.value.toUpperCase(), page: 1 })}
+              />
+            </Field>
+            <Field label="到期状态">
+              <select value={optionQuery.expiry_status} onChange={(event) => setOptionQuery({ ...optionQuery, expiry_status: event.target.value as ExpiryFilter, page: 1 })}>
+                <option value="all">全部</option>
+                <option value="within_30">30 天内</option>
+                <option value="within_7">7 天内</option>
+                <option value="expired">已到期 · 待核对</option>
+              </select>
+            </Field>
+          </Toolbar>
         {asText(positionData?.options?.snapshot_date) ? (
           <div className={`option-snapshot-note ${positionData?.options?.is_stale ? "option-snapshot-note--stale" : ""}`}>
             持仓快照 {formatDate(positionData?.options?.snapshot_date)}
@@ -440,7 +451,10 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
         <DataTable
           rows={optionRows}
           columns={[
-            { key: "contract_title", label: "合约", render: (row) => <div className="option-contract-cell"><strong>{asText(row.contract_title)}</strong><small>{asText(row.raw_contract_code ?? row.symbol)}</small>{asText(row.contract_data_status) === "incomplete" ? <span>合约数据不完整</span> : null}</div> },
+            { key: "contract_title", label: "合约", render: (row) => {
+              const code = asText(row.raw_contract_code ?? row.symbol);
+              return <div className="option-contract-cell"><strong>{asText(row.contract_title)}</strong><small>{code}</small><button type="button" className="option-contract-copy" onClick={() => { void copyContractCode(code).then((copied) => copied && setCopiedContractCode(code)); }}>{copiedContractCode === code ? "已复制" : "复制原始合约代码"}</button>{asText(row.contract_data_status) === "incomplete" ? <span>合约数据不完整</span> : null}</div>;
+            } },
             { key: "days_to_expiry", label: "到期状态", render: (row) => <OptionExpiryBadge row={row} /> },
             { key: "quantity", label: "数量", align: "right", render: (row) => <>{formatNumber(row.quantity, 0)}{row.is_short ? <small className="option-short-label">卖方持仓</small> : null}</> },
             { key: "multiplier", label: "乘数", align: "right", render: (row) => formatNumber(row.multiplier, 0) },
@@ -460,7 +474,9 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
             onPageSizeChange={(pageSize) => setOptionQuery({ ...optionQuery, page_size: pageSize, page: 1 })}
           />
         ) : null}
+        </>}
       </Surface>
+      </div>
 
       {detailOpen && selected ? (
         <PositionDetailModal
@@ -487,23 +503,37 @@ function OptionExpiryBadge({ row }: { row: ApiRecord }) {
   return <span className={`option-expiry-badge option-expiry-badge--${asText(row.expiry_risk, "none")}`}>{label}</span>;
 }
 
+async function copyContractCode(code: string): Promise<boolean> {
+  if (!code) return false;
+  try {
+    await navigator.clipboard.writeText(code);
+    return true;
+  } catch {
+    const input = document.createElement("textarea");
+    input.value = code;
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    document.body.appendChild(input);
+    input.select();
+    const copied = document.execCommand("copy");
+    input.remove();
+    return copied;
+  }
+}
+
 function PieChart({
   rows,
-  totalOverride,
   emptyTitle,
   emptyDetail,
 }: {
   rows: Array<{ label: string; value: number }>;
-  totalOverride?: number;
   emptyTitle: string;
   emptyDetail: string;
 }) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const visible = rows.filter((row) => row.value > 0);
-  const total = totalOverride && totalOverride > 0
-    ? totalOverride
-    : visible.reduce((sum, row) => sum + row.value, 0);
+  const total = visible.reduce((sum, row) => sum + row.value, 0);
   if (visible.length === 0 || total <= 0) {
     return <EmptyState compact title={emptyTitle} detail={emptyDetail} />;
   }

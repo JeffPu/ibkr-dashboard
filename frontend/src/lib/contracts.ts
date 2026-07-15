@@ -22,6 +22,75 @@ export interface ListResponse {
   monthly_stats?: ApiRecord[];
 }
 
+export type PositionRecord = ApiRecord & {
+  asset_category?: string;
+  symbol?: string;
+  underlying_symbol?: string;
+  report_date?: string;
+  quantity?: number;
+  market_value_snapshot?: number;
+};
+
+export type OptionPositionRecord = PositionRecord & {
+  contract_key: string;
+  contract_title: string;
+  raw_contract_code: string;
+  expiry?: string;
+  strike?: string;
+  put_call?: string;
+  multiplier?: number;
+  days_to_expiry: number | null;
+  expiry_status: "expired" | "within_1" | "within_7" | "within_30" | "later" | "incomplete";
+  expiry_risk: "expired" | "urgent" | "warning" | "watch" | "none";
+  contract_data_status: "complete" | "incomplete";
+  is_short: boolean;
+  quote_source?: "snapshot";
+};
+
+export interface OptionPositionSummary {
+  option_net_market_value: number;
+  option_unrealized_pnl: number;
+  expiring_30_contracts: number;
+  expiring_30_short_contracts: number;
+}
+
+export interface PositionsResponse extends Omit<ListResponse, "items" | "summary"> {
+  items?: PositionRecord[] | OptionPositionRecord[];
+  summary?: OptionPositionSummary;
+  snapshot_date?: string | null;
+  is_stale?: boolean;
+  account_base_currency?: string;
+  currency_conversion?: ApiRecord;
+  source?: "ibkr_flex_xml";
+  updated_at?: string | null;
+  missing_reason?: string | null;
+}
+
+export type TradeRecord = ApiRecord & {
+  asset_category?: string;
+  symbol?: string;
+  underlying_symbol?: string;
+  contract_key?: string;
+  contract_title?: string;
+  raw_contract_code?: string;
+  expiry?: string;
+  strike?: string;
+  put_call?: string;
+  multiplier?: number;
+  open_close_indicator?: string;
+  transaction_type?: string;
+  notes?: string;
+};
+
+export interface TradesResponse extends Omit<ListResponse, "items"> {
+  items?: TradeRecord[];
+  account_base_currency?: string;
+  currency_conversion?: ApiRecord;
+  source?: "ibkr_flex_xml";
+  updated_at?: string | null;
+  missing_reason?: string | null;
+}
+
 export type AnalysisStatus =
   | "ready"
   | "pending"
@@ -429,6 +498,9 @@ export interface OverviewResponse extends ApiRecord {
     remaining_count: number;
     snapshot_date: string | null;
     is_stale: boolean;
+    source: "ibkr_flex_xml";
+    updated_at: string | null;
+    missing_reason: string | null;
   };
 }
 
