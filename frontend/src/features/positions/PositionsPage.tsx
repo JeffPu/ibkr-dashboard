@@ -22,10 +22,8 @@ import {
   Field,
   LoadingBlock,
   MetricCard,
-  PageHeader,
   PaginationFooter,
   SegmentedControl,
-  StatusPill,
   Surface,
   Toolbar,
 } from "../../components/Primitives";
@@ -283,19 +281,6 @@ export function PositionsPage({ initialExpiryFilter = "all" }: { initialExpiryFi
 
   return (
     <>
-      <PageHeader
-        eyebrow="持仓明细"
-        title="股票、期权、行业与个股轨迹"
-        meta={
-          <>
-            <StatusPill tone={asText(positionData?.positions?.valuation_mode) === "realtime" ? "positive" : "neutral"}>
-              {asText(positionData?.positions?.valuation_mode, "snapshot")}
-            </StatusPill>
-            <button type="button" onClick={load}>刷新</button>
-          </>
-        }
-      />
-
       {state.loading && !positionData?.positions ? <LoadingBlock /> : null}
       {state.error ? <div className="inline-error">{state.error}</div> : null}
 

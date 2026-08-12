@@ -20,7 +20,7 @@ import {
   normalizeDateKey,
   normalizeMonthKey,
 } from "../../lib/format";
-import { DataState, DeltaText, EmptyState, MetricCard, PageHeader, SegmentedControl, StatusPill, Surface } from "../../components/Primitives";
+import { DataState, DeltaText, EmptyState, MetricCard, SegmentedControl, Surface } from "../../components/Primitives";
 
 type CalendarMode = "month" | "year";
 
@@ -40,18 +40,12 @@ export function PerformancePage() {
 
   return (
     <DataState loading={state.loading} error={state.error} data={state.data} onRetry={load}>
-      {(data) => <PerformanceContent data={data} onRefresh={load} />}
+      {(data) => <PerformanceContent data={data} />}
     </DataState>
   );
 }
 
-function PerformanceContent({
-  data,
-  onRefresh,
-}: {
-  data: ApiRecord;
-  onRefresh: () => void;
-}) {
+function PerformanceContent({ data }: { data: ApiRecord }) {
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("month");
   const [selectedMonth, setSelectedMonth] = useState("");
   const [selectedYear, setSelectedYear] = useState("");
@@ -103,17 +97,6 @@ function PerformanceContent({
 
   return (
     <>
-      <PageHeader
-        eyebrow="业绩分析"
-        title="收益贡献、盈亏日历与交易节奏"
-        meta={
-          <>
-            <StatusPill tone="accent">{asText(data.valuation_mode, "mixed")}</StatusPill>
-            <button type="button" onClick={onRefresh}>刷新</button>
-          </>
-        }
-      />
-
       <div className="metric-grid metric-grid--compact">
         <MetricCard className="performance-kpi-card" label="至今累计盈利" value={<DeltaText value={leaderboardSummary.total_profit} currency={currency} />} tone="positive" />
         <MetricCard className="performance-kpi-card" label="至今累计亏损" value={<DeltaText value={leaderboardSummary.total_loss} currency={currency} />} tone="negative" />

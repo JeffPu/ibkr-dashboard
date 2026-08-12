@@ -1,11 +1,9 @@
 import type {
-  AiModelCatalogResponse,
   ImportContentFile,
   ImportTaskResponse,
   OverviewResponse,
   OverviewRiskWarningResponse,
   PortfolioAnalysisResponse,
-  PortfolioRefreshJob,
   PositionsResponse,
   RequestQuery,
   SettingsResponse,
@@ -74,12 +72,7 @@ export const api = {
   overviewRiskWarning: (query?: RequestQuery) =>
     getJson<OverviewRiskWarningResponse>("/api/overview/risk-warning", query),
   positions: (query?: RequestQuery) => getJson<PositionsResponse>("/api/positions", query),
-  portfolioAnalysis: (query?: RequestQuery) =>
-    getJson<PortfolioAnalysisResponse>("/api/portfolio-analysis", query),
-  refreshPortfolioAnalysisNarrative: (query?: RequestQuery) =>
-    postJson<PortfolioRefreshJob>(`/api/portfolio-analysis/narrative/refresh${buildQuery(query)}`, {}),
-  portfolioAnalysisRefreshJob: (jobId: string) =>
-    getJson<PortfolioRefreshJob>(`/api/portfolio-analysis/narrative/refresh/${encodeURIComponent(jobId)}`),
+  portfolioAnalysis: () => getJson<PortfolioAnalysisResponse>("/api/portfolio-analysis"),
   positionDetail: (symbol: string) => getJson<Record<string, unknown>>(`/api/positions/${encodeURIComponent(symbol)}/detail`),
   industryAllocation: () => getJson<Record<string, unknown>>("/api/positions/industry-allocation"),
   industryMappings: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/industry-mappings", query),
@@ -91,7 +84,6 @@ export const api = {
   trades: (query?: RequestQuery) => getJson<TradesResponse>("/api/trades", query),
   cashFlows: (query?: RequestQuery) => getJson<Record<string, unknown>>("/api/cash-flows", query),
   settings: () => getJson<SettingsResponse>("/api/settings"),
-  aiModels: () => getJson<AiModelCatalogResponse>("/api/settings/ai-models"),
   saveSettings: (payload: SettingsUpdatePayload) => putJson<SettingsResponse>("/api/settings", payload),
   createImportTask: (files: ImportContentFile[]) =>
     postJson<ImportTaskResponse>("/api/import/tasks/content/create", { files }),

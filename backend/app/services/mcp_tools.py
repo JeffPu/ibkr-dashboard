@@ -69,17 +69,18 @@ class ReadOnlyMCPTools:
             rows = self._current_position_rows(symbol=symbol, limit=20)
             return {"status": "ready" if rows else "missing_data", "symbol": symbol, "items": rows}
         if name == "get_portfolio_risk":
-            analysis = self._analysis.get_analysis(section=PortfolioAnalysisSectionKey.PORTFOLIO)
-            return analysis.sections.portfolio.model_dump(mode="json")
+            analysis = self._analysis.get_analysis(section=PortfolioAnalysisSectionKey.PORTFOLIO, allow_ai=False)
+            return analysis.sections.portfolio.model_dump(mode="json", exclude={"narrative"})
         if name == "get_market_regime":
-            analysis = self._analysis.get_analysis(section=PortfolioAnalysisSectionKey.MARKET)
-            return analysis.sections.market.model_dump(mode="json")
+            analysis = self._analysis.get_analysis(section=PortfolioAnalysisSectionKey.MARKET, allow_ai=False)
+            return analysis.sections.market.model_dump(mode="json", exclude={"narrative"})
         if name == "get_stock_analysis":
             analysis = self._analysis.get_analysis(
                 section=PortfolioAnalysisSectionKey.STOCK,
                 symbol=str(args.get("symbol") or "") or None,
+                allow_ai=False,
             )
-            return analysis.sections.stock.model_dump(mode="json")
+            return analysis.sections.stock.model_dump(mode="json", exclude={"narrative"})
         if name == "get_performance_summary":
             return self._list_index("portfolio_returns_v1", limit=int(args.get("limit") or 20))
         if name == "list_cash_flows":

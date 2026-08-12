@@ -1,7 +1,3 @@
-from threading import Event
-from time import monotonic
-from time import sleep
-
 from fastapi.testclient import TestClient
 
 from app.api.portfolio_analysis_contracts import AnalysisStatus
@@ -44,7 +40,7 @@ def test_empty_portfolio_analysis_contract_standardizes_metrics() -> None:
         assert metric["reason"]
 
 
-def test_portfolio_analysis_empty_route_returns_three_sections() -> None:
+def test_market_analysis_empty_route_returns_market_only() -> None:
     service = SettingsService()
     portfolio_analysis_route.set_settings_service(service)
     portfolio_analysis_route.set_raw_repository(None)
@@ -58,22 +54,16 @@ def test_portfolio_analysis_empty_route_returns_three_sections() -> None:
     assert body["generated_at"] is None
     assert body["display_currency"] == "USD"
     assert body["valuation_mode"] == "snapshot"
-    assert set(body["sections"]) == {"market", "portfolio", "stock"}
-    assert body["sections"]["market"]["regime"]["status"] == "missing_data"
-    assert body["sections"]["portfolio"]["risk_rows"] == []
-    assert body["sections"]["portfolio"]["rebalance_advice"]["status"] == "missing_data"
-    assert body["sections"]["portfolio"]["analysis_meta"]["status"] == "missing_data"
-    assert body["integrations"]["ai"]["provider"] == "openai"
-    assert body["integrations"]["telegram"]["enabled"] is False
-    assert body["integrations"]["mcp_tools"] == []
+    assert set(body) == {"status", "generated_at", "display_currency", "valuation_mode", "market", "links"}
+    assert body["market"]["regime"]["status"] == "missing_data"
+    assert "narrative" not in body["market"]
 
 
-def test_portfolio_analysis_section_query_echoes_stock_symbol() -> None:
+def test_market_analysis_route_does_not_expose_removed_sections_or_ai() -> None:
     service = SettingsService()
     service.update(
         base_currency="HKD",
         display_realtime_prices=True,
-        ai_provider="mock",
         telegram_bot_token="telegram-token",
         telegram_allowlisted_chat_ids=["123456789", "-100987654321"],
         telegram_reports_enabled=True,
@@ -83,24 +73,15 @@ def test_portfolio_analysis_section_query_echoes_stock_symbol() -> None:
     portfolio_analysis_route.set_raw_repository(None)
 
     with TestClient(app) as client:
-        response = client.get(
-            "/api/portfolio-analysis",
-            params={"section": "stock", "symbol": "aapl"},
-        )
+        response = client.get("/api/portfolio-analysis")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["active_section"] == "stock"
-    assert body["request"] == {"section": "stock", "symbol": "AAPL"}
-    assert body["sections"]["stock"]["symbol"] == "AAPL"
     assert body["display_currency"] == "HKD"
     assert body["valuation_mode"] == "realtime"
-    assert body["integrations"]["ai"]["provider"] == "mock"
-    assert body["integrations"]["telegram"]["enabled"] is True
-    assert body["integrations"]["telegram"]["allowlisted_chat_ids_count"] == 2
-    assert body["integrations"]["telegram"]["schedule"] == "09:15"
-    assert body["sections"]["stock"]["profile"] == {}
-    assert body["sections"]["stock"]["memo"]["reason"] == "no_current_holdings"
+    assert "sections" not in body
+    assert "integrations" not in body
+    assert "narrative" not in body["market"]
 
 
 def test_portfolio_analysis_openapi_declares_response_and_storage_error() -> None:
@@ -109,19 +90,14 @@ def test_portfolio_analysis_openapi_declares_response_and_storage_error() -> Non
 
     endpoint = spec["paths"]["/api/portfolio-analysis"]["get"]
     assert endpoint["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith(
-        "/PortfolioAnalysisResponse"
+        "/MarketAnalysisResponse"
     )
     assert endpoint["responses"]["503"]["content"]["application/json"]["schema"]["$ref"].endswith(
         "/StorageUnavailableResponse"
     )
-    parameters = {param["name"] for param in endpoint["parameters"]}
-    assert {"section", "symbol", "refresh_ai"}.issubset(parameters)
-
-    refresh_endpoint = spec["paths"]["/api/portfolio-analysis/narrative/refresh"]["post"]
-    refresh_parameters = {param["name"] for param in refresh_endpoint["parameters"]}
-    assert {"section", "symbol"}.issubset(refresh_parameters)
-    assert "202" in refresh_endpoint["responses"]
-    assert "/api/portfolio-analysis/narrative/refresh/{job_id}" in spec["paths"]
+    assert "parameters" not in endpoint
+    assert "/api/portfolio-analysis/narrative/refresh" not in spec["paths"]
+    assert "/api/portfolio-analysis/narrative/refresh/{job_id}" not in spec["paths"]
 
 
 def test_portfolio_section_returns_risk_rows_and_only_weight_change_chart() -> None:
@@ -151,117 +127,6 @@ def test_portfolio_section_returns_risk_rows_and_only_weight_change_chart() -> N
     assert portfolio.analysis_meta["risk_row_count"] == 3
     assert len(portfolio.charts) == 1
     assert portfolio.charts[0].title == "持仓权重 vs 当日涨跌"
-
-
-def test_portfolio_refresh_job_is_fast_single_flight_and_reaches_terminal(monkeypatch) -> None:
-    entered = Event()
-    release = Event()
-
-    class FakeService:
-        def get_analysis(self, **_: object):
-            entered.set()
-            release.wait(timeout=2)
-            return build_empty_portfolio_analysis_response(
-                display_currency="USD",
-                valuation_mode="snapshot",
-                section=portfolio_analysis_route.PortfolioAnalysisSectionKey.PORTFOLIO,
-            )
-
-    monkeypatch.setattr(portfolio_analysis_route, "_build_service", lambda progress_callback=None: FakeService())
-    with portfolio_analysis_route._refresh_job_lock:
-        portfolio_analysis_route._refresh_jobs.clear()
-        portfolio_analysis_route._active_refresh_jobs.clear()
-
-    with TestClient(app) as client:
-        started = monotonic()
-        first = client.post(
-            "/api/portfolio-analysis/narrative/refresh",
-            params={"section": "portfolio"},
-        )
-        elapsed = monotonic() - started
-        assert first.status_code == 202
-        assert elapsed < 0.2
-        assert entered.wait(timeout=1)
-
-        second = client.post(
-            "/api/portfolio-analysis/narrative/refresh",
-            params={"section": "portfolio"},
-        )
-        assert second.status_code == 202
-        assert second.json()["job_id"] == first.json()["job_id"]
-
-        missing = client.get("/api/portfolio-analysis/narrative/refresh/not-found")
-        assert missing.status_code == 404
-
-        release.set()
-        job = first.json()
-        for _ in range(50):
-            job = client.get(f"/api/portfolio-analysis/narrative/refresh/{job['job_id']}").json()
-            if job["status"] in {"ready", "fallback", "error"}:
-                break
-            sleep(0.01)
-
-    assert job["status"] == "fallback"
-    assert job["failed_stage"] == "preparing_inputs"
-    assert job["stage_durations_ms"]["preparing_inputs"] >= 0
-
-
-def test_portfolio_refresh_job_deadline_is_terminal_and_keeps_single_flight(monkeypatch) -> None:
-    entered = Event()
-    release = Event()
-
-    class FakeService:
-        def get_analysis(self, **_: object):
-            entered.set()
-            release.wait(timeout=2)
-            return build_empty_portfolio_analysis_response(
-                display_currency="USD",
-                valuation_mode="snapshot",
-                section=portfolio_analysis_route.PortfolioAnalysisSectionKey.PORTFOLIO,
-            )
-
-    monkeypatch.setattr(portfolio_analysis_route, "_build_service", lambda progress_callback=None: FakeService())
-    monkeypatch.setattr(portfolio_analysis_route, "_REFRESH_JOB_DEADLINE_SECONDS", 0.03)
-    with portfolio_analysis_route._refresh_job_lock:
-        portfolio_analysis_route._refresh_jobs.clear()
-        portfolio_analysis_route._active_refresh_jobs.clear()
-
-    try:
-        with TestClient(app) as client:
-            first = client.post(
-                "/api/portfolio-analysis/narrative/refresh",
-                params={"section": "portfolio"},
-            )
-            assert first.status_code == 202
-            assert entered.wait(timeout=1)
-
-            job = first.json()
-            for _ in range(100):
-                job = client.get(f"/api/portfolio-analysis/narrative/refresh/{job['job_id']}").json()
-                if job["status"] == "error":
-                    break
-                sleep(0.01)
-
-            assert job["status"] == "error"
-            assert job["reason"] == "refresh_job_deadline_exceeded"
-            assert job["failed_stage"] == "preparing_inputs"
-
-            duplicate = client.post(
-                "/api/portfolio-analysis/narrative/refresh",
-                params={"section": "portfolio"},
-            )
-            assert duplicate.status_code == 202
-            assert duplicate.json()["job_id"] == first.json()["job_id"]
-    finally:
-        release.set()
-
-    for _ in range(100):
-        with portfolio_analysis_route._refresh_job_lock:
-            finished = bool(portfolio_analysis_route._refresh_jobs[first.json()["job_id"]]["_worker_finished"])
-        if finished:
-            break
-        sleep(0.01)
-    assert finished
 
 
 class _FakeES:

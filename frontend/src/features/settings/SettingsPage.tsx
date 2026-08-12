@@ -1,8 +1,6 @@
-import { ChangeEvent, useCallback, useEffect, useState } from "react";
+import { ChangeEvent, useState } from "react";
 import { api } from "../../lib/api";
 import type {
-  AiModelProviderCatalog,
-  AiProvider,
   ApiRecord,
   ImportTaskResponse,
   SettingsResponse,
@@ -10,7 +8,7 @@ import type {
 } from "../../lib/contracts";
 import { asArray, asNumber, asText, formatDateTimeMinute, formatInteger } from "../../lib/format";
 import { useApiData } from "../../lib/useApiData";
-import { DataState, DataTable, EmptyState, Field, MetricCard, PageHeader, StatusPill, Surface } from "../../components/Primitives";
+import { DataState, DataTable, EmptyState, Field, MetricCard, StatusPill, Surface } from "../../components/Primitives";
 
 interface SettingsForm {
   base_currency: string;
@@ -20,14 +18,6 @@ interface SettingsForm {
   flex_query_id: string;
   pull_frequency_minutes: number;
   display_realtime_prices: boolean;
-  ai_provider: AiProvider;
-  ai_model: string;
-  openai_api_key: string;
-  minimax_api_key: string;
-  minimax_base_url: string;
-  deepseek_api_key: string;
-  deepseek_base_url: string;
-  tavily_api_key: string;
   futu_connection_mode: "disabled" | "local_opend" | "longbridge";
   futu_opend_host: string;
   futu_opend_port: number;
@@ -48,14 +38,6 @@ const defaultForm: SettingsForm = {
   flex_query_id: "",
   pull_frequency_minutes: 60,
   display_realtime_prices: false,
-  ai_provider: "openai",
-  ai_model: "gpt-5-mini",
-  openai_api_key: "",
-  minimax_api_key: "",
-  minimax_base_url: "https://api.minimaxi.com/v1",
-  deepseek_api_key: "",
-  deepseek_base_url: "https://api.deepseek.com",
-  tavily_api_key: "",
   futu_connection_mode: "disabled",
   futu_opend_host: "127.0.0.1",
   futu_opend_port: 11111,
@@ -99,34 +81,6 @@ function parseTelegramChatIds(value: string): string[] {
     .filter(Boolean);
 }
 
-function defaultAiModel(provider: AiProvider, catalog: Partial<Record<AiProvider, AiModelProviderCatalog>>): string {
-  return catalog[provider]?.default_model ?? "";
-}
-
-function normalizeAiProviderChange(
-  nextProvider: AiProvider,
-  form: SettingsForm,
-  catalog: Partial<Record<AiProvider, AiModelProviderCatalog>>,
-): SettingsForm {
-  const options = catalog[nextProvider]?.models ?? [];
-  const nextModel = options.some((option) => option.value === form.ai_model) ? form.ai_model : defaultAiModel(nextProvider, catalog);
-  return { ...form, ai_provider: nextProvider, ai_model: nextModel };
-}
-
-function aiProviderConfigured(data: SettingsResponse): boolean {
-  if (data.ai_provider === "mock") return true;
-  if (data.ai_provider === "minimax") return Boolean(data.minimax_api_key);
-  if (data.ai_provider === "deepseek") return Boolean(data.deepseek_api_key);
-  return Boolean(data.openai_api_key);
-}
-
-function aiProviderStatusText(data: SettingsResponse): string {
-  if (data.ai_provider === "mock") return "Mock AI";
-  if (data.ai_provider === "minimax") return data.minimax_api_key ? "MiniMax 已配置" : "待配置 MiniMax";
-  if (data.ai_provider === "deepseek") return data.deepseek_api_key ? "DeepSeek 已配置" : "待配置 DeepSeek";
-  return data.openai_api_key ? "OpenAI 已配置" : "待配置 OpenAI";
-}
-
 function settingsToForm(data: SettingsResponse): SettingsForm {
   return {
     base_currency: asText(data.base_currency, "USD"),
@@ -136,14 +90,6 @@ function settingsToForm(data: SettingsResponse): SettingsForm {
     flex_query_id: asText(data.flex_query_id, ""),
     pull_frequency_minutes: asNumber(data.pull_frequency_minutes, 60),
     display_realtime_prices: Boolean(data.display_realtime_prices),
-    ai_provider: data.ai_provider ?? "openai",
-    ai_model: asText(data.ai_model, ""),
-    openai_api_key: asText(data.openai_api_key, ""),
-    minimax_api_key: asText(data.minimax_api_key, ""),
-    minimax_base_url: asText(data.minimax_base_url, "https://api.minimaxi.com/v1"),
-    deepseek_api_key: asText(data.deepseek_api_key, ""),
-    deepseek_base_url: asText(data.deepseek_base_url, "https://api.deepseek.com"),
-    tavily_api_key: asText(data.tavily_api_key, ""),
     futu_connection_mode: data.futu_connection_mode ?? "disabled",
     futu_opend_host: asText(data.futu_opend_host, "127.0.0.1"),
     futu_opend_port: asNumber(data.futu_opend_port, 11111),
@@ -159,7 +105,6 @@ function settingsToForm(data: SettingsResponse): SettingsForm {
 
 export function SettingsPage() {
   const [form, setForm] = useState<SettingsForm>(defaultForm);
-  const [aiModelCatalog, setAiModelCatalog] = useState<Partial<Record<AiProvider, AiModelProviderCatalog>>>({});
   const [showIntegrationGuide, setShowIntegrationGuide] = useState(false);
   const [message, setMessage] = useState("");
   const [importResult, setImportResult] = useState<ImportTaskResponse | null>(null);
@@ -168,26 +113,6 @@ export function SettingsPage() {
     setForm(settingsToForm(data));
     return data;
   });
-
-  const loadAiModels = useCallback(async () => {
-    try {
-      const data = await api.aiModels();
-      const catalog = Object.fromEntries(data.providers.map((item) => [item.provider, item])) as Partial<Record<AiProvider, AiModelProviderCatalog>>;
-      setAiModelCatalog(catalog);
-    } catch {
-      setAiModelCatalog({});
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadAiModels();
-  }, [loadAiModels]);
-
-  useEffect(() => {
-    const options = aiModelCatalog[form.ai_provider]?.models ?? [];
-    if (!options.length || options.some((option) => option.value === form.ai_model)) return;
-    setForm((current) => ({ ...current, ai_model: defaultAiModel(current.ai_provider, aiModelCatalog) }));
-  }, [aiModelCatalog, form.ai_model, form.ai_provider]);
 
   const save = async () => {
     setMessage("正在保存设置...");
@@ -200,14 +125,6 @@ export function SettingsPage() {
         flex_query_id: form.flex_query_id,
         pull_frequency_minutes: form.pull_frequency_minutes,
         display_realtime_prices: form.display_realtime_prices,
-        ai_provider: form.ai_provider,
-        ai_model: form.ai_model || defaultAiModel(form.ai_provider, aiModelCatalog),
-        openai_api_key: form.openai_api_key,
-        minimax_api_key: form.minimax_api_key,
-        minimax_base_url: form.minimax_base_url,
-        deepseek_api_key: form.deepseek_api_key,
-        deepseek_base_url: form.deepseek_base_url,
-        tavily_api_key: form.tavily_api_key,
         futu_connection_mode: form.futu_connection_mode,
         futu_opend_host: form.futu_opend_host,
         futu_opend_port: form.futu_opend_port,
@@ -221,10 +138,6 @@ export function SettingsPage() {
       };
       if (hasMaskedValue(form.finnhub_api_key)) delete payload.finnhub_api_key;
       if (hasMaskedValue(form.flex_token)) delete payload.flex_token;
-      if (hasMaskedValue(form.openai_api_key)) delete payload.openai_api_key;
-      if (hasMaskedValue(form.minimax_api_key)) delete payload.minimax_api_key;
-      if (hasMaskedValue(form.deepseek_api_key)) delete payload.deepseek_api_key;
-      if (hasMaskedValue(form.tavily_api_key)) delete payload.tavily_api_key;
       if (hasMaskedValue(form.telegram_bot_token)) delete payload.telegram_bot_token;
       await api.saveSettings(payload);
       setMessage("设置已保存");
@@ -262,29 +175,15 @@ export function SettingsPage() {
     }
   };
 
-  const currentAiModelOptions = aiModelCatalog[form.ai_provider]?.models
-    ?? (form.ai_model ? [{ value: form.ai_model, label: form.ai_model }] : []);
-
   return (
     <DataState loading={state.loading} error={state.error} data={state.data} onRetry={load}>
       {(data) => (
         <>
-          <PageHeader
-            eyebrow="设置与导入"
-            title="本地分析控制台"
-            meta={
-              <>
-                <StatusPill tone={data.flex_query_id ? "positive" : "neutral"}>{data.flex_query_id ? "Flex 已配置" : "待配置 Flex"}</StatusPill>
-                <StatusPill tone={aiProviderConfigured(data) ? "positive" : "neutral"}>
-                  {aiProviderStatusText(data)}
-                </StatusPill>
-                <StatusPill>{data.ai_model}</StatusPill>
-                <StatusPill>同步 {formatDateTimeMinute(data.last_successful_sync_at_local ?? data.last_successful_sync_at)}</StatusPill>
-                <button type="button" onClick={load}>刷新</button>
-                <button type="button" onClick={save}>保存全部</button>
-              </>
-            }
-          />
+          <div className="page-header__meta">
+            <StatusPill tone={data.flex_query_id ? "positive" : "neutral"}>{data.flex_query_id ? "Flex 已配置" : "待配置 Flex"}</StatusPill>
+            <StatusPill>同步 {formatDateTimeMinute(data.last_successful_sync_at_local ?? data.last_successful_sync_at)}</StatusPill>
+            <button type="button" onClick={save}>保存全部</button>
+          </div>
 
           {message ? <div className="message-bar">{message}</div> : null}
 
@@ -398,65 +297,12 @@ export function SettingsPage() {
                 </div>
               </Surface>
 
-              <Surface title="AI Provider" className="settings-panel">
-                <div className="settings-compact-grid">
-                  <Field label="AI Provider">
-                    <select
-                      value={form.ai_provider}
-                      onChange={(event) => setForm(normalizeAiProviderChange(event.target.value as AiProvider, form, aiModelCatalog))}
-                    >
-                      <option value="openai">OpenAI</option>
-                      <option value="minimax">MiniMax</option>
-                      <option value="deepseek">DeepSeek</option>
-                      <option value="mock">Mock</option>
-                    </select>
-                  </Field>
-                  <Field label="AI 模型">
-                    <select value={form.ai_model} onChange={(event) => setForm({ ...form, ai_model: event.target.value })}>
-                      {currentAiModelOptions.length === 0 ? <option value="">加载模型列表</option> : null}
-                      {currentAiModelOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
-                  </Field>
-                  {form.ai_provider === "openai" ? (
-                    <Field label="OpenAI API Key">
-                      <input value={form.openai_api_key} onChange={(event) => setForm({ ...form, openai_api_key: event.target.value })} />
-                    </Field>
-                  ) : null}
-                  {form.ai_provider === "minimax" ? (
-                    <>
-                      <Field label="MiniMax API Key">
-                        <input value={form.minimax_api_key} onChange={(event) => setForm({ ...form, minimax_api_key: event.target.value })} />
-                      </Field>
-                      <Field label="MiniMax Base URL">
-                        <input value={form.minimax_base_url} onChange={(event) => setForm({ ...form, minimax_base_url: event.target.value })} />
-                      </Field>
-                    </>
-                  ) : null}
-                  {form.ai_provider === "deepseek" ? (
-                    <>
-                      <Field label="DeepSeek API Key">
-                        <input value={form.deepseek_api_key} onChange={(event) => setForm({ ...form, deepseek_api_key: event.target.value })} />
-                      </Field>
-                      <Field label="DeepSeek Base URL">
-                        <input value={form.deepseek_base_url} onChange={(event) => setForm({ ...form, deepseek_base_url: event.target.value })} />
-                      </Field>
-                      <Field label="Tavily Search API Key">
-                        <input value={form.tavily_api_key} onChange={(event) => setForm({ ...form, tavily_api_key: event.target.value })} />
-                      </Field>
-                      <small>持仓联网研究由 DeepSeek 发起工具调用，Tavily 只接收证券研究查询。</small>
-                    </>
-                  ) : null}
-                </div>
-              </Surface>
-
               <Surface
                 title="MCP 与 Telegram"
                 className="settings-panel"
                 action={<button type="button" className="settings-guide-button" onClick={() => setShowIntegrationGuide(true)}>指南</button>}
               >
-                <div className="settings-compact-grid">
+                <div className="settings-compact-grid settings-integration-grid">
                   <Field label="Telegram Bot Token">
                     <input value={form.telegram_bot_token} onChange={(event) => setForm({ ...form, telegram_bot_token: event.target.value })} />
                   </Field>
@@ -474,32 +320,26 @@ export function SettingsPage() {
                       rows={3}
                     />
                   </Field>
-                </div>
-                <div className="settings-switch-grid settings-switch-row">
-                  <label className="switch-field switch-field--wide">
-                    <input
-                      type="checkbox"
-                      checked={form.telegram_reports_enabled}
-                      onChange={(event) => setForm({ ...form, telegram_reports_enabled: event.target.checked })}
-                    />
-                    <span className="switch-control" />
-                    <span>
-                      <strong>Telegram 日报</strong>
-                      <small>按配置时间发送只读摘要</small>
-                    </span>
-                  </label>
-                  <label className="switch-field switch-field--wide">
-                    <input
-                      type="checkbox"
-                      checked={form.mcp_server_enabled}
-                      onChange={(event) => setForm({ ...form, mcp_server_enabled: event.target.checked })}
-                    />
-                    <span className="switch-control" />
-                    <span>
-                      <strong>MCP Server</strong>
-                      <small>暴露只读工具入口</small>
-                    </span>
-                  </label>
+                  <div className="settings-integration-switches" aria-label="集成功能开关">
+                    <label className="switch-field">
+                      <input
+                        type="checkbox"
+                        checked={form.telegram_reports_enabled}
+                        onChange={(event) => setForm({ ...form, telegram_reports_enabled: event.target.checked })}
+                      />
+                      <span className="switch-control" />
+                      <span><strong>Telegram 日报</strong></span>
+                    </label>
+                    <label className="switch-field">
+                      <input
+                        type="checkbox"
+                        checked={form.mcp_server_enabled}
+                        onChange={(event) => setForm({ ...form, mcp_server_enabled: event.target.checked })}
+                      />
+                      <span className="switch-control" />
+                      <span><strong>MCP Server</strong></span>
+                    </label>
+                  </div>
                 </div>
               </Surface>
 
@@ -549,12 +389,12 @@ function IntegrationGuideModal({ onClose }: { onClose: () => void }) {
                 <li>给新 Bot 发一条消息；如果要发到群，把 Bot 加入群并在群里发一条消息。</li>
                 <li>在浏览器打开 https://api.telegram.org/bot&lt;你的TOKEN&gt;/getUpdates，找到 message.chat.id。</li>
                 <li>把 chat.id 填入 Telegram Chat IDs。多个会话用换行或逗号分隔，群组 ID 通常是负数。</li>
-                <li>打开 Telegram 日报，设置日报时间，点击页面右上角保存全部。</li>
+                <li>按需打开 Telegram 日报、设置发送时间，再点击页面顶部的保存全部。</li>
               </ol>
             </div>
             <div className="settings-guide-card">
-              <strong>日报说明</strong>
-              <p>日报会发送当前持仓分析状态摘要。它依赖本地已导入的数据、AI/分析缓存和 Telegram 配置；如果 Chat IDs 为空或日报开关关闭，定时任务不会发送。</p>
+              <strong>日报与权限</strong>
+              <p>日报会发送当前市场与持仓状态摘要。它依赖本地已导入的数据和 Telegram 配置；Chat IDs 为空或日报关闭时，不会发送。所有指令仅限允许列表中的会话使用。</p>
             </div>
           </div>
           <div className="settings-guide-section">
@@ -577,22 +417,59 @@ function IntegrationGuideModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
           <div className="settings-guide-section settings-guide-section--wide">
-            <div className="settings-guide-card">
-              <strong>MCP 配置与使用</strong>
+            <div className="settings-guide-card settings-guide-card--wide">
+              <strong>MCP 接入前检查</strong>
               <ol>
-                <li>打开 MCP Server，点击保存全部。</li>
-                <li>在支持 MCP 的客户端中新增 stdio server，命令指向本项目后端的 mcp_server 模块。</li>
-                <li>可用工具包括 get_account_overview、list_positions、get_position_detail、get_portfolio_risk、get_market_regime、get_performance_summary、list_cash_flows、get_wheel_snapshot。</li>
-                <li>MCP 工具全部只读，只读取本地 ES 与分析服务，不提供交易、下单、撤单或账户修改能力。</li>
+                <li>先启动本地 Elasticsearch 与仪表盘服务，并完成至少一次 XML 导入。</li>
+                <li>可在本页打开 MCP Server 并保存，以记录本地接入已启用；MCP 客户端仍会按自身配置启动一个 stdio 进程。</li>
+                <li>配置中的 command 与 cwd 必须替换为当前项目的绝对路径。MCP 进程直接读取本地 Elasticsearch，不通过浏览器的 5176 或 API 的 8085 端口。</li>
+                <li>保存客户端配置后，重启该客户端或重新连接 MCP。可先运行 --list-tools 验证进程能列出工具。</li>
               </ol>
+            </div>
+          </div>
+          <div className="settings-guide-section settings-guide-section--wide settings-guide-section--split">
+            <div className="settings-guide-card">
+              <strong>Claude Desktop 配置</strong>
+              <p>macOS 配置文件通常为 ~/Library/Application Support/Claude/claude_desktop_config.json。</p>
+              <pre className="settings-guide-code"><code>{`{
+  "mcpServers": {
+    "ibkr-dashboard": {
+      "command": "/绝对路径/ibkr-dashboard/.venv/bin/python",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "/绝对路径/ibkr-dashboard/backend",
+      "env": {
+        "ES_BACKEND": "http",
+        "ES_HOST": "http://127.0.0.1:9200"
+      }
+    }
+  }
+}`}</code></pre>
+            </div>
+            <div className="settings-guide-card">
+              <strong>Codex 配置</strong>
+              <p>在 ~/.codex/config.toml 中加入一个本地 stdio MCP server。</p>
+              <pre className="settings-guide-code"><code>{`[mcp_servers.ibkr-dashboard]
+command = "/绝对路径/ibkr-dashboard/.venv/bin/python"
+args = ["-m", "app.mcp_server"]
+cwd = "/绝对路径/ibkr-dashboard/backend"
+
+[mcp_servers.ibkr-dashboard.env]
+ES_BACKEND = "http"
+ES_HOST = "http://127.0.0.1:9200"`}</code></pre>
+            </div>
+          </div>
+          <div className="settings-guide-section settings-guide-section--wide settings-guide-section--split">
+            <div className="settings-guide-card">
+              <strong>验证与可用工具</strong>
+              <p>在 backend 目录执行：ES_BACKEND=http ES_HOST=http://127.0.0.1:9200 ../.venv/bin/python -m app.mcp_server --list-tools。成功后可使用 get_account_overview、list_positions、get_position_detail、get_portfolio_risk、get_market_regime、get_stock_analysis、get_performance_summary、list_cash_flows、get_wheel_snapshot。</p>
             </div>
             <div className="settings-guide-card">
               <strong>排查顺序</strong>
               <ul>
                 <li>Telegram 收不到消息：先检查 Bot Token，再检查 Chat ID 是否来自 getUpdates，最后确认日报开关和保存状态。</li>
                 <li>Telegram 指令 forbidden：把当前会话的 chat.id 加到 Telegram Chat IDs 后保存。</li>
-                <li>日报内容缺数据：先导入 XML 或运行每日同步，再刷新持仓分析。</li>
-                <li>MCP 连不上：确认后端本地服务可启动、MCP Server 已启用，并重启 MCP 客户端连接。</li>
+                <li>日报内容缺数据：先导入 XML 或运行每日同步，再刷新市场数据。</li>
+                <li>MCP 连不上：核对 command、cwd、ES_HOST 是否为绝对路径与本地地址，再用 --list-tools 验证后重启客户端连接。</li>
               </ul>
             </div>
           </div>

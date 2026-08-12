@@ -1,4 +1,4 @@
-import { Component, Suspense, lazy, useMemo, useState } from "react";
+import { Component, Suspense, lazy, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import type { NavItem, PageKey } from "./lib/contracts";
 import { Icon } from "./components/Icon";
@@ -19,7 +19,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: "positions", label: "持仓明细", detail: "仓位 / 行业 / 成本", icon: "positions" },
   { key: "performance", label: "业绩分析", detail: "收益 / 日历 / 归因", icon: "performance" },
   { key: "trades", label: "交易明细", detail: "交易 / 现金 / 审计", icon: "trades" },
-  { key: "portfolioAnalysis", label: "持仓分析", detail: "市场 / 风险 / 个股", icon: "analysis" },
+  { key: "portfolioAnalysis", label: "市场分析", detail: "市场状态与风险信号", icon: "analysis" },
   { key: "settings", label: "设置与导入", detail: "凭据 / XML / 集成", icon: "settings" },
 ];
 
@@ -31,7 +31,7 @@ const PAGE_RENDERERS: Record<PageKey, (navigate: (page: PageKey, options?: Navig
   performance: () => <PerformancePage />,
   trades: () => <TradesPage />,
   portfolioAnalysis: () => (
-    <Suspense fallback={<div className="loading-block"><span /><strong>正在加载持仓分析</strong></div>}>
+    <Suspense fallback={<div className="loading-block"><span /><strong>正在加载市场分析</strong></div>}>
       <PortfolioAnalysisPage />
     </Suspense>
   ),
@@ -42,7 +42,6 @@ function App() {
   const [activePage, setActivePage] = useState<PageKey>("overview");
   const [navigateOptions, setNavigateOptions] = useState<NavigateOptions>();
   const [sidebarVisible, setSidebarVisible] = useState(true);
-  const activeItem = useMemo(() => NAV_ITEMS.find((item) => item.key === activePage) ?? NAV_ITEMS[0], [activePage]);
   const renderPage = PAGE_RENDERERS[activePage];
   const navigate = (page: PageKey, options?: NavigateOptions) => {
     setNavigateOptions(options);
@@ -87,13 +86,9 @@ function App() {
             >
               ☰
             </button>
-            <div>
-              <strong>{activePage === "overview" ? "本地投资控制台" : activeItem.label}</strong>
-            </div>
           </div>
           <div className="top-strip__meta">
             <span><i />Flex 已配置</span>
-            <span><i />AI 已配置</span>
             <span>数据 本地</span>
           </div>
         </div>

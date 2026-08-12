@@ -150,13 +150,6 @@ def _empty_overview(sync_at: str | None) -> dict:
             "snapshot_date": None,
             "is_stale": False,
         },
-        "ai_summary": {
-            "status": "pending",
-            "title": "AI Summary",
-            "headline": "AI 摘要待接入",
-            "bullets": [],
-            "updated_at": None,
-        },
         "risk_dashboard": _missing_risk_dashboard(sync_at_local),
         "net_value_curve": {
             "rows": [],
@@ -1684,16 +1677,6 @@ def get_overview() -> dict:
         "benchmark_series": benchmark_series,
         "asset_metric_rows": asset_metric_rows,
         "recent_trades": recent_trades,
-        "ai_summary": {
-            "status": "pending",
-            "title": "AI Summary",
-            "headline": "AI 摘要待接入",
-            "bullets": [
-                "当前阶段先展示本地可追溯的资产、持仓和同步状态。",
-                "接入持仓分析后，这里将复用真实 AI provider 输出，不在总览页编造判断。",
-            ],
-            "updated_at": None,
-        },
         "risk_dashboard": risk_dashboard,
         "option_expiration_alerts": option_expiration_alerts,
         "net_value_curve": {

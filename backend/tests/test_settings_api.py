@@ -26,14 +26,12 @@ def test_get_settings_returns_defaults() -> None:
     assert body["flex_query_id"] == ""
     assert body["pull_frequency_minutes"] == 60
     assert body["display_realtime_prices"] is False
-    assert body["ai_provider"] == "openai"
-    assert body["ai_model"] == "gpt-5-mini"
-    assert body["openai_api_key"] == ""
-    assert body["minimax_api_key"] == ""
-    assert body["minimax_base_url"] == "https://api.minimaxi.com/v1"
-    assert body["deepseek_api_key"] == ""
-    assert body["deepseek_base_url"] == "https://api.deepseek.com"
-    assert body["tavily_api_key"] == ""
+    assert "ai_provider" not in body
+    assert "ai_model" not in body
+    assert "openai_api_key" not in body
+    assert "minimax_api_key" not in body
+    assert "deepseek_api_key" not in body
+    assert "tavily_api_key" not in body
     assert body["futu_connection_mode"] == "disabled"
     assert body["futu_opend_host"] == "127.0.0.1"
     assert body["futu_opend_port"] == 11111
@@ -48,17 +46,11 @@ def test_get_settings_returns_defaults() -> None:
     assert body["last_successful_sync_date"] is None
 
 
-def test_get_ai_models_returns_provider_catalog() -> None:
+def test_ai_model_catalog_is_not_exposed() -> None:
     client = TestClient(app)
     response = client.get("/api/settings/ai-models")
 
-    assert response.status_code == 200
-    providers = {item["provider"]: item for item in response.json()["providers"]}
-    assert providers["openai"]["default_model"] == "gpt-5-mini"
-    assert providers["openai"]["models"][0]["value"] == "gpt-5-mini"
-    assert providers["minimax"]["models"][0]["value"] == "MiniMax-M2.5-highspeed"
-    assert providers["deepseek"]["models"][0]["value"] == "deepseek-v4-flash"
-    assert providers["mock"]["models"][0]["value"] == "mock"
+    assert response.status_code == 404
 
 
 def test_update_settings_persists_values() -> None:
@@ -71,14 +63,6 @@ def test_update_settings_persists_values() -> None:
         "flex_query_id": "Q-1001",
         "pull_frequency_minutes": 30,
         "display_realtime_prices": False,
-        "ai_provider": "openai",
-        "ai_model": "gpt-5",
-        "openai_api_key": "sk-demo-openai",
-        "minimax_api_key": "mini-demo-key",
-        "minimax_base_url": "https://api.minimaxi.com/v1/",
-        "deepseek_api_key": "deepseek-demo-key",
-        "deepseek_base_url": "https://api.deepseek.com/",
-        "tavily_api_key": "tvly-demo-key",
         "futu_connection_mode": "local_opend",
         "futu_opend_host": "127.0.0.1",
         "futu_opend_port": 11111,
@@ -104,22 +88,12 @@ def test_update_settings_persists_values() -> None:
     assert body["flex_query_id"] == "Q-1001"
     assert body["pull_frequency_minutes"] == 30
     assert body["display_realtime_prices"] is False
-    assert body["ai_provider"] == "openai"
-    assert body["ai_model"] == "gpt-5"
-    assert body["openai_api_key"].startswith("sk")
-    assert body["openai_api_key"].endswith("ai")
-    assert "*" in body["openai_api_key"]
-    assert body["minimax_api_key"].startswith("mi")
-    assert body["minimax_api_key"].endswith("ey")
-    assert "*" in body["minimax_api_key"]
-    assert body["minimax_base_url"] == "https://api.minimaxi.com/v1"
-    assert body["deepseek_api_key"].startswith("de")
-    assert body["deepseek_api_key"].endswith("ey")
-    assert "*" in body["deepseek_api_key"]
-    assert body["deepseek_base_url"] == "https://api.deepseek.com"
-    assert body["tavily_api_key"].startswith("tv")
-    assert body["tavily_api_key"].endswith("ey")
-    assert "*" in body["tavily_api_key"]
+    assert "ai_provider" not in body
+    assert "ai_model" not in body
+    assert "openai_api_key" not in body
+    assert "minimax_api_key" not in body
+    assert "deepseek_api_key" not in body
+    assert "tavily_api_key" not in body
     assert body["futu_connection_mode"] == "local_opend"
     assert body["futu_opend_host"] == "127.0.0.1"
     assert body["futu_opend_port"] == 11111
@@ -261,18 +235,6 @@ def test_update_settings_rejects_invalid_v2_settings() -> None:
     )
     assert invalid_chat_id.status_code == 400
     assert "invalid telegram_allowlisted_chat_ids" in invalid_chat_id.json()["message"]
-
-    invalid_ai_provider = client.put("/api/settings", json={"ai_provider": "anthropic"})
-    assert invalid_ai_provider.status_code == 400
-    assert "unsupported ai_provider" in invalid_ai_provider.json()["message"]
-
-    invalid_minimax_base_url = client.put("/api/settings", json={"minimax_base_url": "api.minimaxi.com/v1"})
-    assert invalid_minimax_base_url.status_code == 400
-    assert "minimax_base_url" in invalid_minimax_base_url.json()["message"]
-
-    invalid_deepseek_base_url = client.put("/api/settings", json={"deepseek_base_url": "api.deepseek.com"})
-    assert invalid_deepseek_base_url.status_code == 400
-    assert "deepseek_base_url" in invalid_deepseek_base_url.json()["message"]
 
     invalid_futu_port = client.put("/api/settings", json={"futu_opend_port": 70000})
     assert invalid_futu_port.status_code == 400

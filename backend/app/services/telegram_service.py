@@ -5,7 +5,6 @@ from typing import Any, Protocol
 import httpx
 
 from app.api.portfolio_analysis_contracts import PortfolioAnalysisSectionKey
-from app.services.ai_narrative_service import build_ai_provider
 from app.services.market_data_provider import MarketDataProvider
 from app.services.portfolio_analysis_service import PortfolioAnalysisService
 from app.services.settings_service import SettingsService
@@ -72,7 +71,7 @@ class TelegramCommandService:
         if command == "/positions":
             return {"ok": True, "status": "ready", "message": self._positions_message()}
         if command == "/risk":
-            analysis = self._analysis_service.get_analysis(section=PortfolioAnalysisSectionKey.PORTFOLIO)
+            analysis = self._analysis_service.get_analysis(section=PortfolioAnalysisSectionKey.PORTFOLIO, allow_ai=False)
             concentration = analysis.sections.portfolio.concentration
             return {
                 "ok": True,
@@ -86,7 +85,7 @@ class TelegramCommandService:
         if command in {"/cashflow", "/cash"}:
             return {"ok": True, "status": "ready", "message": self._cashflow_message()}
         if command == "/market":
-            analysis = self._analysis_service.get_analysis(section=PortfolioAnalysisSectionKey.MARKET)
+            analysis = self._analysis_service.get_analysis(section=PortfolioAnalysisSectionKey.MARKET, allow_ai=False)
             return {
                 "ok": True,
                 "status": analysis.sections.market.status,
@@ -95,20 +94,18 @@ class TelegramCommandService:
         if command == "/report":
             message, status = self.build_daily_report_message()
             return {"ok": True, "status": status, "message": message}
-        if normalized_text and not normalized_text.startswith("/") and _ai_is_configured(settings):
-            return self._ai_question_message(question=normalized_text)
         return {
             "ok": False,
             "status": "unsupported_command",
-            "message": "暂不支持该只读命令。可用命令：/summary、/positions、/risk、/cash、/market、/report；配置 AI 后也可以直接发送中文问题。",
+            "message": "暂不支持该只读命令。可用命令：/summary、/positions、/risk、/cash、/market、/report。",
         }
 
     def build_daily_report_message(self) -> tuple[str, str]:
-        analysis = self._analysis_service.get_analysis()
+        analysis = self._analysis_service.get_analysis(allow_ai=False)
         expiration_text = self._option_expiration_report()
         return (
             (
-                "持仓分析日报："
+                "市场分析日报："
                 f"整体={_status_label(analysis.status.value)}；"
                 f"市场={_status_label(analysis.sections.market.status.value)}；"
                 f"组合={_status_label(analysis.sections.portfolio.status.value)}；"
@@ -200,64 +197,6 @@ class TelegramCommandService:
         rows = self._raw_repository.es.search(index="ibkr_stmt_funds_lines_v1", size=100)
         total = sum(_to_float(row.get("amount")) for row in rows)
         return f"现金流记录数={len(rows)}，合计={round(total, 2)}"
-
-    def _ai_question_message(self, *, question: str) -> dict[str, object]:
-        settings = self._settings_service.get()
-        provider = build_ai_provider(
-            provider_name=settings.ai_provider,
-            openai_api_key=settings.openai_api_key,
-            ai_model=settings.ai_model,
-            minimax_api_key=settings.minimax_api_key,
-            minimax_base_url=settings.minimax_base_url,
-            deepseek_api_key=settings.deepseek_api_key,
-            deepseek_base_url=settings.deepseek_base_url,
-        )
-        metrics = self._telegram_question_context(question=question)
-        narrative = provider.generate(section="telegram_question", metrics=metrics)
-        narrative_status = _status_value(getattr(narrative, "status", "error"))
-        if narrative_status != "ready":
-            return {
-                "ok": False,
-                "status": narrative_status,
-                "message": f"AI 问答暂不可用：{narrative.reason or '模型未返回可用结果'}",
-            }
-        parts = [narrative.summary.strip()]
-        parts.extend(f"- {item}" for item in narrative.bullets if item)
-        if narrative.risks:
-            parts.append("风险/不确定性：" + "；".join(narrative.risks[:3]))
-        return {
-            "ok": True,
-            "status": "ready",
-            "message": "\n".join(part for part in parts if part).strip(),
-            "provider": narrative.provider,
-            "model": narrative.model,
-        }
-
-    def _telegram_question_context(self, *, question: str) -> dict[str, Any]:
-        context: dict[str, Any] = {
-            "user_question": question,
-            "read_only_boundary": "只能基于本地持仓、账户和分析指标回答，不提供下单、撤单、改单或交易执行建议。",
-            "overview_message": self._overview_message(),
-            "positions_message": self._positions_message(),
-            "cashflow_message": self._cashflow_message(),
-        }
-        try:
-            portfolio = self._analysis_service.get_analysis(section=PortfolioAnalysisSectionKey.PORTFOLIO)
-            context["portfolio_status"] = portfolio.sections.portfolio.status.value
-            context["portfolio_concentration"] = {
-                key: {
-                    "value": metric.value,
-                    "unit": metric.unit,
-                    "status": metric.status.value,
-                }
-                for key, metric in portfolio.sections.portfolio.concentration.items()
-            }
-        except Exception:
-            context["portfolio_status"] = "unavailable"
-        if self._raw_repository is not None:
-            context["top_positions"] = _top_position_context(self._raw_repository, limit=8)
-            context["price_history"] = self._price_history_context(context["top_positions"])
-        return context
 
     def _price_history_context(self, positions: object) -> list[dict[str, Any]]:
         if not isinstance(positions, list):
@@ -632,25 +571,6 @@ def _normalize_command(text: str) -> str:
     if "@" in command:
         command = command.split("@", 1)[0]
     return command
-
-
-def _ai_is_configured(settings: object) -> bool:
-    provider = str(getattr(settings, "ai_provider", "") or "").lower()
-    if provider == "mock":
-        return True
-    if provider == "minimax":
-        return bool(
-            str(
-                getattr(settings, "minimax_api_key", "")
-                or getattr(settings, "openai_api_key", "")
-                or ""
-            ).strip()
-        )
-    if provider == "deepseek":
-        return bool(str(getattr(settings, "deepseek_api_key", "") or "").strip())
-    if provider == "openai":
-        return bool(str(getattr(settings, "openai_api_key", "") or "").strip())
-    return False
 
 
 def _status_label(status: str) -> str:

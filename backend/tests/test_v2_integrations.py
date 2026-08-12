@@ -1279,32 +1279,45 @@ def test_minimax_provider_normalizes_scalar_risks_and_percent_confidence(monkeyp
     assert narrative.confidence == 0.95
 
 
-def test_portfolio_analysis_uses_positions_for_risk_metrics() -> None:
+def test_market_analysis_uses_positions_for_market_context(monkeypatch) -> None:
     repo = _repo_with_positions()
     service = SettingsService()
-    service.update(ai_provider="mock")
+
+    class FakeMarketDataProvider:
+        name = "fake_market"
+
+        def get_kline_history(self, _symbol: str, *, days: int = 90) -> list[MarketDataPoint]:
+            return []
+
+        def get_sentiment(self, symbol: str) -> dict[str, object]:
+            return {"status": "missing_data", "symbol": symbol, "source": self.name}
+
     portfolio_route.set_raw_repository(repo)
     portfolio_route.set_settings_service(service)
+    monkeypatch.setattr(
+        portfolio_route,
+        "_build_service",
+        lambda: PortfolioAnalysisService(
+            raw_repository=repo,
+            settings_service=service,
+            market_data_provider=FakeMarketDataProvider(),
+        ),
+    )
 
     with TestClient(app) as client:
-        response = client.get("/api/portfolio-analysis?section=portfolio")
+        response = client.get("/api/portfolio-analysis")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["sections"]["portfolio"]["status"] == "ready"
-    assert body["sections"]["portfolio"]["concentration"]["ai_theme"]["value"] > 0
-    assert body["sections"]["portfolio"]["greeks"] == {}
-    assert body["sections"]["portfolio"]["expiration_risk"] == {}
-    assert body["sections"]["portfolio"]["factor_exposure"]["ai_beta"]["value"] > 0
-    assert body["sections"]["portfolio"]["hedge_suggestions"]
-    assert body["sections"]["portfolio"]["alerts"]
-    assert body["sections"]["portfolio"]["risk_rows"]
-    assert body["sections"]["portfolio"]["rebalance_advice"]["status"] == "ready"
-    assert body["sections"]["portfolio"]["analysis_meta"]["risk_row_count"] == len(
-        body["sections"]["portfolio"]["risk_rows"]
-    )
-    chart_titles = [chart["title"] for chart in body["sections"]["portfolio"]["charts"]]
-    assert chart_titles == ["持仓权重 vs 当日涨跌"]
+    market = body["market"]
+    assert market["status"] == "ready"
+    assert market["indicators"]["portfolio_weighted_change"]["status"] == "ready"
+    assert market["indicators"]["breadth"]["status"] == "ready"
+    assert market["watch_symbols"] == ["NVDA", "AAPL"]
+    assert market["portfolio_impact"]
+    assert market["opportunities"]
+    assert "narrative" not in market
+    assert "sections" not in body
 
 
 def test_market_and_stock_rsi_use_different_symbols_when_available() -> None:
@@ -1994,7 +2007,7 @@ def test_telegram_report_dry_run_uses_cached_analysis_shape() -> None:
     assert body["ok"] is True
     assert body["would_send_to"] == 2
     assert body["schedule"] == "08:15"
-    assert "持仓分析日报" in body["message"]
+    assert "市场分析日报" in body["message"]
 
 
 def test_telegram_delivery_never_sends_without_bot_token() -> None:
@@ -2037,15 +2050,14 @@ def test_telegram_scheduled_report_uses_allowlist_and_delivery_client() -> None:
     assert result["status"] == "sent"
     assert result["sent"] == 2
     assert [chat_id for chat_id, _message in delivery.calls] == ["123456789", "987654321"]
-    assert all("持仓分析日报" in message for _chat_id, message in delivery.calls)
+    assert all("市场分析日报" in message for _chat_id, message in delivery.calls)
 
 
-def test_telegram_command_uses_ai_for_plain_language_question_when_configured() -> None:
+def test_telegram_command_rejects_plain_language_question_without_ai() -> None:
     repo = _repo_with_positions()
     settings = SettingsService()
     settings.update(
         telegram_allowlisted_chat_ids=["123456789"],
-        ai_provider="mock",
     )
     analysis = PortfolioAnalysisService(
         raw_repository=repo,
@@ -2059,71 +2071,9 @@ def test_telegram_command_uses_ai_for_plain_language_question_when_configured() 
 
     result = command_service.handle_command(chat_id="123456789", text="我的组合现在最大风险是什么？")
 
-    assert result["ok"] is True
-    assert result["provider"] == "mock"
-    assert "telegram_question 摘要" in result["message"]
-
-
-def test_telegram_ai_context_reads_snapshot_position_pnl_fields() -> None:
-    repo = _repo_with_positions()
-    repo.es.update(
-        index="ibkr_position_snapshots_v1",
-        id="U1_20260502_STK_GAIN_SUMMARY",
-        doc={
-            "account_id": "U1",
-            "report_date": "20260502",
-            "asset_category": "STK",
-            "symbol": "GAIN",
-            "quantity": "10",
-            "mark_price_snapshot": "150",
-            "average_cost_price": "100",
-            "cost_basis_money": "1000",
-            "market_value_snapshot": "1500",
-            "unrealized_pnl_snapshot": "500",
-        },
-        doc_as_upsert=True,
-    )
-    repo.es.update(
-        index="ibkr_position_snapshots_v1",
-        id="U1_20260502_STK_LOSS_SUMMARY",
-        doc={
-            "account_id": "U1",
-            "report_date": "20260502",
-            "asset_category": "STK",
-            "symbol": "LOSS",
-            "quantity": "5",
-            "mark_price_snapshot": "80",
-            "average_cost_price": "100",
-            "cost_basis_money": "500",
-            "market_value_snapshot": "400",
-            "unrealized_pnl_snapshot": "-100",
-        },
-        doc_as_upsert=True,
-    )
-    repo.es.update(
-        index="ibkr_trade_records_v1",
-        id="realized-gain",
-        doc={"trade_id": "realized-gain", "symbol": "GAIN", "fifo_pnl_realized": "42.5"},
-        doc_as_upsert=True,
-    )
-    settings = SettingsService()
-    settings.update(telegram_allowlisted_chat_ids=["123456789"], ai_provider="mock")
-    analysis = PortfolioAnalysisService(raw_repository=repo, settings_service=settings)
-    command_service = TelegramCommandService(
-        settings_service=settings,
-        analysis_service=analysis,
-        raw_repository=repo,
-    )
-
-    context = command_service._telegram_question_context(question="检查盈亏")
-    positions = {row["symbol"]: row for row in context["top_positions"]}
-
-    assert set(positions) == {"GAIN", "LOSS"}
-    assert positions["GAIN"]["market_value"] == 1500
-    assert positions["GAIN"]["unrealized_pnl"] == 500
-    assert positions["GAIN"]["unrealized_pnl_source_field"] == "unrealized_pnl_snapshot"
-    assert positions["GAIN"]["realized_pnl"] == 42.5
-    assert positions["LOSS"]["unrealized_pnl"] == -100
+    assert result["ok"] is False
+    assert result["status"] == "unsupported_command"
+    assert "可用命令" in result["message"]
 
 
 def test_telegram_update_poller_consumes_updates_and_sends_reply() -> None:

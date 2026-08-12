@@ -23,6 +23,12 @@
 !README.md
 !AGENTS.md
 *.png
+!promo-assets/showcase-overview.png
+!promo-assets/showcase-positions.png
+!promo-assets/showcase-performance.png
+!promo-assets/showcase-trades.png
+!promo-assets/showcase-market.png
+!promo-assets/showcase-settings.png
 *.jpg
 *.jpeg
 *.gif

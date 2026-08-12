@@ -24,27 +24,8 @@ quote_service: QuoteService | None = None
 daily_sync_runner: Callable[[str, str], dict[str, str]] | None = None
 pull_frequency_update_handler: Callable[[int], None] | None = None
 telegram_report_update_handler: Callable[[], None] | None = None
-SUPPORTED_AI_PROVIDERS = {"openai", "minimax", "deepseek", "mock"}
-MAX_AI_MODEL_LENGTH = 100
 SUPPORTED_FUTU_CONNECTION_MODES = {"disabled", "local_opend", "longbridge"}
 DEFAULT_HISTORY_REFRESH_SYMBOLS = ["SPY", "QQQ", "DIA", "IWM", "^GSPC", "^IXIC", "^NDX", "^VIX"]
-AI_MODEL_OPTIONS = {
-    "openai": [
-        {"value": "gpt-5-mini", "label": "GPT-5 mini · 更快"},
-        {"value": "gpt-5", "label": "GPT-5 · 质量优先"},
-    ],
-    "minimax": [
-        {"value": "MiniMax-M2.5-highspeed", "label": "MiniMax M2.5 highspeed · 更快"},
-        {"value": "MiniMax-M2.7-highspeed", "label": "MiniMax M2.7 highspeed · 质量优先"},
-    ],
-    "deepseek": [
-        {"value": "deepseek-v4-flash", "label": "DeepSeek V4 Flash · 更快"},
-        {"value": "deepseek-v4-pro", "label": "DeepSeek V4 Pro · 质量优先"},
-    ],
-    "mock": [
-        {"value": "mock", "label": "Mock · 本地模拟"},
-    ],
-}
 TIME_OF_DAY_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TELEGRAM_CHAT_ID_PATTERN = re.compile(r"^-?\d{5,20}$")
 
@@ -57,14 +38,6 @@ class SettingsUpdateRequest(BaseModel):
     flex_query_id: str | None = None
     pull_frequency_minutes: int | None = None
     display_realtime_prices: bool | None = None
-    ai_provider: str | None = None
-    ai_model: str | None = None
-    openai_api_key: str | None = None
-    minimax_api_key: str | None = None
-    minimax_base_url: str | None = None
-    deepseek_api_key: str | None = None
-    deepseek_base_url: str | None = None
-    tavily_api_key: str | None = None
     futu_connection_mode: str | None = None
     futu_opend_host: str | None = None
     futu_opend_port: int | None = None
@@ -141,20 +114,6 @@ def get_settings() -> dict[str, object]:
     return _settings_response()
 
 
-@router.get("/api/settings/ai-models", responses=STORAGE_UNAVAILABLE_OPENAPI_RESPONSE)
-def get_ai_models() -> dict[str, object]:
-    return {
-        "providers": [
-            {
-                "provider": provider,
-                "default_model": options[0]["value"],
-                "models": options,
-            }
-            for provider, options in AI_MODEL_OPTIONS.items()
-        ]
-    }
-
-
 @router.put("/api/settings", responses=STORAGE_UNAVAILABLE_OPENAPI_RESPONSE)
 def update_settings(payload: SettingsUpdateRequest) -> dict[str, object]:
     if payload.pull_frequency_minutes is not None and payload.pull_frequency_minutes <= 0:
@@ -162,14 +121,6 @@ def update_settings(payload: SettingsUpdateRequest) -> dict[str, object]:
             status_code=400,
             detail="pull_frequency_minutes must be greater than 0",
         )
-    if payload.ai_provider is not None and payload.ai_provider not in SUPPORTED_AI_PROVIDERS:
-        raise HTTPException(status_code=400, detail="unsupported ai_provider")
-    if payload.ai_model is not None and len(payload.ai_model.strip()) > MAX_AI_MODEL_LENGTH:
-        raise HTTPException(status_code=400, detail="ai_model is too long")
-    if payload.minimax_base_url is not None and not payload.minimax_base_url.startswith(("https://", "http://")):
-        raise HTTPException(status_code=400, detail="minimax_base_url must be an http(s) URL")
-    if payload.deepseek_base_url is not None and not payload.deepseek_base_url.startswith(("https://", "http://")):
-        raise HTTPException(status_code=400, detail="deepseek_base_url must be an http(s) URL")
     if (
         payload.futu_connection_mode is not None
         and payload.futu_connection_mode not in SUPPORTED_FUTU_CONNECTION_MODES
@@ -197,14 +148,6 @@ def update_settings(payload: SettingsUpdateRequest) -> dict[str, object]:
         flex_query_id=payload.flex_query_id,
         pull_frequency_minutes=payload.pull_frequency_minutes,
         display_realtime_prices=payload.display_realtime_prices,
-        ai_provider=payload.ai_provider,
-        ai_model=payload.ai_model.strip() if payload.ai_model is not None else None,
-        openai_api_key=payload.openai_api_key,
-        minimax_api_key=payload.minimax_api_key,
-        minimax_base_url=payload.minimax_base_url.rstrip("/") if payload.minimax_base_url else payload.minimax_base_url,
-        deepseek_api_key=payload.deepseek_api_key,
-        deepseek_base_url=payload.deepseek_base_url.rstrip("/") if payload.deepseek_base_url else payload.deepseek_base_url,
-        tavily_api_key=payload.tavily_api_key,
         futu_connection_mode=payload.futu_connection_mode,
         futu_opend_host=payload.futu_opend_host,
         futu_opend_port=payload.futu_opend_port,
@@ -456,14 +399,6 @@ def _settings_response() -> dict[str, object]:
         "flex_query_id": settings.flex_query_id,
         "pull_frequency_minutes": settings.pull_frequency_minutes,
         "display_realtime_prices": settings.display_realtime_prices,
-        "ai_provider": settings.ai_provider,
-        "ai_model": _resolved_ai_model(settings.ai_provider, settings.ai_model),
-        "openai_api_key": _mask_secret(settings.openai_api_key),
-        "minimax_api_key": _mask_secret(settings.minimax_api_key),
-        "minimax_base_url": settings.minimax_base_url,
-        "deepseek_api_key": _mask_secret(settings.deepseek_api_key),
-        "deepseek_base_url": settings.deepseek_base_url,
-        "tavily_api_key": _mask_secret(settings.tavily_api_key),
         "futu_connection_mode": settings.futu_connection_mode,
         "futu_opend_host": settings.futu_opend_host,
         "futu_opend_port": settings.futu_opend_port,
@@ -476,11 +411,4 @@ def _settings_response() -> dict[str, object]:
         "report_cache_ttl_minutes": settings.report_cache_ttl_minutes,
         "last_successful_sync_at": settings.last_successful_sync_at,
         "last_successful_sync_date": settings.last_successful_sync_date,
-    }
-
-
-def _resolved_ai_model(provider: str, model: str) -> str:
-    if model:
-        return model
-    options = AI_MODEL_OPTIONS.get(provider) or AI_MODEL_OPTIONS["openai"]
-    return str(options[0]["value"])
+}

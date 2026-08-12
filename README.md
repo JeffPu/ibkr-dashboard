@@ -8,6 +8,45 @@ IBKR Dashboard is a locally hosted investment analytics dashboard for Interactiv
 
 This project is strictly read-only. It does not support trading, placing, canceling, or modifying orders, unlocking trading, or executing risk controls. Real account data, XML files, and API keys should remain on your local machine.
 
+## Showcase
+
+Every preview below is captured from the current local build with synthetic mock data. No real account identifiers, positions, transactions, credentials, or imported files are included. Click a preview to open it at full size.
+
+以下预览来自当前本地构建，仅使用合成 mock 数据，不包含真实账户标识、持仓、交易、凭据或导入文件。点击图片可查看原图。
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <a href="promo-assets/showcase-overview.png"><img src="promo-assets/showcase-overview.png" alt="Asset overview with mock data" width="100%" /></a><br />
+      <sub>Asset overview / 资产总览</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="promo-assets/showcase-positions.png"><img src="promo-assets/showcase-positions.png" alt="Position details with mock data" width="100%" /></a><br />
+      <sub>Positions / 持仓明细</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <a href="promo-assets/showcase-performance.png"><img src="promo-assets/showcase-performance.png" alt="Performance analysis with mock data" width="100%" /></a><br />
+      <sub>Performance analysis / 业绩分析</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="promo-assets/showcase-trades.png"><img src="promo-assets/showcase-trades.png" alt="Transactions with mock data" width="100%" /></a><br />
+      <sub>Transactions / 交易明细</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <a href="promo-assets/showcase-market.png"><img src="promo-assets/showcase-market.png" alt="Market analysis with mock data" width="100%" /></a><br />
+      <sub>Market analysis / 市场分析</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="promo-assets/showcase-settings.png"><img src="promo-assets/showcase-settings.png" alt="Settings and import with mock data" width="100%" /></a><br />
+      <sub>Settings and import / 设置与导入</sub>
+    </td>
+  </tr>
+</table>
+
 ## Who It Is For
 
 - IBKR account holders who can export Flex XML files.
@@ -45,13 +84,10 @@ This project is strictly read-only. It does not support trading, placing, cancel
 - Supports querying deposits and withdrawals to reconcile cash flows with account value changes.
 - Preserves the original IBKR Flex XML accounting conventions for traceability.
 
-### Portfolio Analysis
+### Market Analysis
 
-- Provides market analysis and portfolio analysis views.
+- Provides a market analysis view.
 - Market analysis covers market conditions, strength indicators, portfolio impact, opportunities, and risks related to current positions.
-- Portfolio analysis covers concentration, thematic exposure, correlation, tail risk, macro sensitivity, and position-level risk.
-- Risk charts show relationships among portfolio weights, price changes, and thematic exposure.
-- The position risk table supports structured AI output describing each symbol's thesis status, risks, monitoring points, and read-only suggestions.
 - When external data is unavailable, the page explicitly reports missing or unavailable data instead of inventing values.
 
 ### Settings and Import
@@ -60,9 +96,8 @@ This project is strictly read-only. It does not support trading, placing, cancel
 - Imports Flex XML files.
 - Supports IBKR Flex online synchronization.
 - Supports read-only market data from Finnhub, Longbridge, Yahoo Finance, and Futu OpenD.
-- Supports OpenAI, MiniMax, DeepSeek, and a local mock provider for intelligent summaries and structured portfolio analysis.
 - Supports read-only Telegram commands and scheduled daily reports.
-- Provides an MCP stdio server that lets AI clients such as Claude Desktop and Codex Desktop read local analysis results.
+- Provides an MCP stdio server that lets supported desktop clients read local analysis results.
 
 ## Technology Stack
 
@@ -216,7 +251,7 @@ ES_BACKEND=in_memory pytest -q tests/
 5. Optionally enter a Finnhub API key. The application works without one, but some real-time quotes and historical data may be limited.
 6. To use IBKR Flex online synchronization, enter the Flex Token and Query ID.
 7. If you already have a Flex XML file, select and import it in the XML import section.
-8. After the import succeeds, review the data under **Asset Overview**, **Positions**, **Performance Analysis**, **Transactions**, and **Portfolio Analysis**.
+8. After the import succeeds, review the data under **Asset Overview**, **Positions**, **Performance Analysis**, **Transactions**, and **Market Analysis**.
 
 ## Get an IBKR Flex XML File
 
@@ -246,17 +281,6 @@ For long account histories, export XML files by calendar year. Keep the XML file
 - The timezone controls the display of trade dates, cash-flow dates, and scheduled tasks.
 - Real-time price priority attempts to refresh displayed prices from external market data and falls back to imported data when external sources are unavailable.
 - The IBKR Flex Token and Query ID enable online synchronization. Without them, you can still use XML file imports.
-
-### AI Provider
-
-Go to **Settings and Import** and select a provider under AI settings.
-
-- `openai`: Enter an OpenAI API key. The backend uses the OpenAI API to generate intelligent summaries and structured analysis.
-- `minimax`: Enter a MiniMax API key. The backend calls the MiniMax OpenAI-compatible Chat Completions API.
-- `deepseek`: Enter a DeepSeek API key for structured portfolio analysis and intelligent summaries.
-- `mock`: A local simulation provider for development and testing that does not access external services.
-
-The Portfolio Analysis page reads structured metrics and cached intelligent summaries by default; it does not call an external model synchronously every time the page opens. To update the text, click **Refresh AI**. The backend refreshes it in the background and updates the cache after a successful response. Model timeouts or failures do not block portfolio analysis data from loading.
 
 ### Market Data Providers
 
@@ -315,7 +339,7 @@ curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates"
 ```
 
 4. Add the returned `message.chat.id` to the Chat ID allowlist. Group and channel IDs are usually negative.
-5. Save the Bot Token, allowlist, and daily report time. Enable **Telegram Daily Report** only when automatic reports are needed.
+5. Save the Bot Token, allowlist, and daily report time. Click **Save All**, then enable **Telegram Daily Report** only when automatic reports are needed.
 
 The backend provides a read-only command dry-run endpoint for checking command responses and allowlist rules:
 
@@ -325,16 +349,20 @@ curl -X POST http://127.0.0.1:8085/api/telegram/commands/dry-run \
   -d '{"chat_id":"123456789","text":"/risk"}'
 ```
 
-Supported commands:
+Supported read-only commands:
 
 ```text
 /overview
+/summary
 /positions
 /risk
 /cashflow
+/cash
 /market
 /report
 ```
+
+`/summary` is an alias for `/overview`, and `/cash` is an alias for `/cashflow`. These commands use local account and market data only. None requires an AI provider.
 
 Daily report scheduling is disabled by default. When enabled, the backend sends the `/report` output to all allowlisted Chat IDs at the configured time. Before deploying a real bot, use the dry-run endpoint to preview the report and recipient count:
 
@@ -344,7 +372,14 @@ curl -X POST http://127.0.0.1:8085/api/telegram/reports/dry-run
 
 ### MCP
 
-The MCP server is a stdio process that exposes read-only tools to clients such as Claude Desktop and Codex Desktop. It can read local positions, risk summaries, market analysis, and portfolio analysis, and does not provide any trading actions.
+The MCP server is a stdio process that exposes local, read-only dashboard data to supported desktop clients. It can read positions, risk summaries, market analysis, performance, cash flows, and option snapshots. It does not run an AI provider and cannot place, modify, or cancel trades.
+
+Before configuring a client:
+
+1. Start local Elasticsearch and the dashboard, then import at least one Flex XML file.
+2. The examples below use the project-root `.venv` created by `npm run dev:all`. In **Settings and Import**, enable **MCP Server** and click **Save All** to record the local preference. Your client still starts the stdio process itself.
+3. Replace every placeholder with the absolute path of this checkout. The MCP process reads Elasticsearch directly. It does not connect through the web UI on port `5176` or the API on port `8085`.
+4. After saving the client configuration, restart or reconnect the client.
 
 The Claude Desktop configuration file on macOS is usually located at:
 
@@ -358,9 +393,9 @@ Example configuration:
 {
   "mcpServers": {
     "ibkr-dashboard": {
-      "command": "/Users/your-name/cursor/ibkr-dashboard/backend/.venv/bin/python",
+      "command": "/absolute/path/ibkr-dashboard/.venv/bin/python",
       "args": ["-m", "app.mcp_server"],
-      "cwd": "/Users/your-name/cursor/ibkr-dashboard/backend",
+      "cwd": "/absolute/path/ibkr-dashboard/backend",
       "env": {
         "ES_BACKEND": "http",
         "ES_HOST": "http://127.0.0.1:9200"
@@ -374,30 +409,34 @@ For Codex Desktop or Codex CLI with TOML configuration, add the following to `~/
 
 ```toml
 [mcp_servers.ibkr-dashboard]
-command = "/Users/your-name/cursor/ibkr-dashboard/backend/.venv/bin/python"
+command = "/absolute/path/ibkr-dashboard/.venv/bin/python"
 args = ["-m", "app.mcp_server"]
-cwd = "/Users/your-name/cursor/ibkr-dashboard/backend"
+cwd = "/absolute/path/ibkr-dashboard/backend"
 
 [mcp_servers.ibkr-dashboard.env]
 ES_BACKEND = "http"
 ES_HOST = "http://127.0.0.1:9200"
 ```
 
-For a development smoke test without Elasticsearch, temporarily use:
+Validate the same setup before connecting a client:
 
 ```bash
-cd backend
-ES_BACKEND=in_memory .venv/bin/python -m app.mcp_server --list-tools
+cd /absolute/path/ibkr-dashboard/backend
+ES_BACKEND=http ES_HOST=http://127.0.0.1:9200 ../.venv/bin/python -m app.mcp_server --list-tools
 ```
+
+The command lists `get_account_overview`, `list_positions`, `get_position_detail`, `get_portfolio_risk`, `get_market_regime`, `get_stock_analysis`, `get_performance_summary`, `list_cash_flows`, and `get_wheel_snapshot`. Use `symbol` for a single position or stock query, and `limit` where a list tool accepts it.
+
+If the client cannot connect, check the absolute `command` and `cwd`, then verify `ES_HOST` points to the local Elasticsearch service. If tools connect but return missing data, import a Flex XML file or run the daily sync before reconnecting the client.
 
 ## Data and Privacy
 
 - Real XML files are not uploaded to third-party services.
 - Application data is stored in the local Docker volume `es_data` by default.
 - Deleting containers does not delete data; deleting the Docker volume does.
-- Credentials such as the IBKR Flex Token, Finnhub API key, AI provider API keys, and Telegram Bot Token should only be stored in local settings.
+- Credentials such as the IBKR Flex Token, Finnhub API key, and Telegram Bot Token should only be stored in local settings.
 - Do not commit real XML, CSV, Excel, `.env`, API key, Flex Token, or Telegram Bot Token files or values to the repository.
-- External market data and AI providers are only used to read market data or generate analysis and cannot trigger account trades.
+- External market data providers are only used to read market data and cannot trigger account trades.
 
 ## FAQ
 
@@ -429,14 +468,14 @@ Confirm that the imported file is an IBKR Flex XML file rather than a PDF, CSV, 
 
 To avoid inconsistent cross-page currency conversions, the base currency primarily affects Asset Overview. The Positions, Transactions, and Performance pages preserve the original account and XML currencies.
 
-### Can I Still Use the Dashboard When AI or Market Data Is Unavailable?
+### Can I Still Use the Dashboard When Market Data Is Unavailable?
 
-Yes. Asset, position, performance, and transaction analysis primarily use local Flex XML data. External market data and AI only enhance the analysis; when unavailable, the page reports missing or unavailable data or uses local rule-based results.
+Yes. Asset, position, performance, and transaction analysis primarily use local Flex XML data. When external market data is unavailable, the page reports missing or unavailable data or uses local rule-based results.
 
 ## Current Limitations
 
 - Long-term historical prices, benchmark history, and external market data depend on public data-source availability and rate limits.
-- External quotes, AI summaries, and market sentiment indicators in Portfolio Analysis depend on their respective providers.
+- External quotes and market sentiment indicators in Market Analysis depend on their respective providers.
 - Telegram daily reports require a valid Bot Token, network connectivity, and a supported runtime environment.
 - MCP tools are read-only and do not support, and are not planned to support, trading actions.
 
@@ -489,13 +528,10 @@ IBKR Dashboard 是一个本地运行的 IBKR 投资分析看板。它读取 Inte
 - 支持出入金记录查询，帮助核对现金流和账户净值变化。
 - 交易记录和现金流水保持 IBKR Flex XML 的原始口径，便于追溯。
 
-### 持仓分析
+### 市场分析
 
-- 提供市场分析和组合持仓分析两个视角。
-- 市场分析围绕当前持仓展示市场状态、强弱指标、组合影响、机会和风险。
-- 持仓分析展示集中度、主题暴露、相关性、尾部风险、宏观敏感性和逐项持仓风险。
-- 风险图表用于观察权重、涨跌、主题暴露之间的关系。
-- 持仓风险表支持结构化 AI 输出，给出每个标的的逻辑状态、风险点、跟踪点和只读建议。
+- 展示市场状态、强弱指标、组合影响、机会和风险。
+- 风险图表用于观察市场指标与当前持仓的关联。
 - 外部数据不可用时，页面会明确显示缺失或不可用，不会编造数值。
 
 ### 设置与导入
@@ -504,9 +540,8 @@ IBKR Dashboard 是一个本地运行的 IBKR 投资分析看板。它读取 Inte
 - 支持 Flex XML 文件导入。
 - 支持 IBKR Flex 在线同步配置。
 - 支持 Finnhub、长桥、Yahoo Finance、Futu OpenD 等只读行情来源。
-- 支持 OpenAI、MiniMax、DeepSeek 和本地 mock provider，用于智能摘要和结构化持仓分析。
 - 支持 Telegram 只读命令和日报推送。
-- 提供 MCP stdio server，可接入 Claude Desktop、Codex Desktop 等 AI 客户端读取本地分析结果。
+- 提供 MCP stdio server，可接入支持的桌面客户端读取本地分析结果。
 
 ## 技术栈
 
@@ -660,7 +695,7 @@ ES_BACKEND=in_memory pytest -q tests/
 5. 按需填写 Finnhub API Key。没有 Key 也可以先使用，部分实时行情和历史数据可能会受限。
 6. 如果要使用 IBKR Flex 在线同步，填写 Flex Token 和 Query ID。
 7. 如果已经有 Flex XML 文件，直接在 XML 导入模块选择文件并导入。
-8. 导入成功后，进入“资产总览”“持仓明细”“业绩分析”“交易明细”“持仓分析”查看数据。
+8. 导入成功后，进入“资产总览”“持仓明细”“业绩分析”“交易明细”“市场分析”查看数据。
 
 ## 获取 IBKR Flex XML
 
@@ -690,17 +725,6 @@ Performance & Reports -> Flex Queries -> Activity Flex Query
 - 时区用于交易日期、现金流日期和定时任务展示。
 - 实时价格优先会尽量使用外部行情刷新展示价，外部行情不可用时回退到导入数据。
 - IBKR Flex Token 和 Query ID 用于在线同步；如果不配置，也可以只通过 XML 文件导入使用。
-
-### AI Provider
-
-进入“设置与导入”，在 AI 配置中选择 provider。
-
-- `openai`：填写 OpenAI API Key，后端通过 OpenAI 接口生成智能摘要和结构化分析。
-- `minimax`：填写 MiniMax API Key，后端调用 MiniMax OpenAI-compatible Chat Completions API。
-- `deepseek`：填写 DeepSeek API Key，用于结构化持仓分析和智能摘要。
-- `mock`：开发和测试用的本地模拟 provider，不会访问外部服务。
-
-持仓分析页默认读取结构化指标和已缓存的智能摘要，不会在每次进入页面时都同步请求外部模型。需要更新文案时，点击页面里的“刷新AI”；后端会触发后台刷新，并在成功后更新缓存。模型超时或失败不会阻塞持仓分析数据加载。
 
 ### 行情源
 
@@ -759,7 +783,7 @@ curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates"
 ```
 
 4. 把返回里的 `message.chat.id` 填入白名单 Chat ID。群组或频道一般是负数 ID。
-5. 保存 Bot Token、白名单、日报时间；需要自动日报时再打开“Telegram 日报”。
+5. 保存 Bot Token、白名单、日报时间，点击“保存全部”；需要自动日报时再打开“Telegram 日报”。
 
 当前后端提供只读命令 dry-run 接口，方便先验证命令返回内容和白名单规则：
 
@@ -769,16 +793,20 @@ curl -X POST http://127.0.0.1:8085/api/telegram/commands/dry-run \
   -d '{"chat_id":"123456789","text":"/risk"}'
 ```
 
-支持的命令包括：
+支持的只读命令包括：
 
 ```text
 /overview
+/summary
 /positions
 /risk
 /cashflow
+/cash
 /market
 /report
 ```
+
+`/summary` 是 `/overview` 的别名，`/cash` 是 `/cashflow` 的别名。这些命令只使用本地账户和行情数据，不需要 AI provider。
 
 日报调度默认关闭。开启后，后端会按设置中的日报时间把 `/report` 内容发送给所有白名单 Chat ID。部署真实 Bot 前，可以先用 dry-run 查看日报内容和发送人数：
 
@@ -788,7 +816,14 @@ curl -X POST http://127.0.0.1:8085/api/telegram/reports/dry-run
 
 ### MCP
 
-MCP server 是 stdio 进程，暴露只读工具给 Claude Desktop、Codex Desktop 等客户端。它可以读取本地持仓、风险摘要、市场分析和组合分析，不提供任何交易动作。
+MCP server 是 stdio 进程，把本地看板的只读数据暴露给支持的桌面客户端。它可以读取持仓、风险摘要、市场分析、业绩、现金流和期权快照，不运行 AI provider，也不提供下单、改仓或撤单能力。
+
+接入客户端前：
+
+1. 启动本地 Elasticsearch 和看板，并完成至少一次 Flex XML 导入。
+2. 下方示例使用 `npm run dev:all` 在项目根目录创建的 `.venv`。在“设置与导入”中打开“MCP Server”并点击“保存全部”，用于记录本地接入偏好；客户端仍会自行启动 stdio 进程。
+3. 将示例中的占位路径替换为当前项目的绝对路径。MCP 进程直接读取 Elasticsearch，不经过 `5176` 端口的网页或 `8085` 端口的 API。
+4. 保存客户端配置后，重启或重新连接客户端。
 
 Claude Desktop 的 macOS 配置文件通常在：
 
@@ -802,9 +837,9 @@ Claude Desktop 的 macOS 配置文件通常在：
 {
   "mcpServers": {
     "ibkr-dashboard": {
-      "command": "/Users/your-name/cursor/ibkr-dashboard/backend/.venv/bin/python",
+      "command": "/绝对路径/ibkr-dashboard/.venv/bin/python",
       "args": ["-m", "app.mcp_server"],
-      "cwd": "/Users/your-name/cursor/ibkr-dashboard/backend",
+      "cwd": "/绝对路径/ibkr-dashboard/backend",
       "env": {
         "ES_BACKEND": "http",
         "ES_HOST": "http://127.0.0.1:9200"
@@ -818,30 +853,34 @@ Codex Desktop / Codex CLI 使用 TOML 配置时，可以在 `~/.codex/config.tom
 
 ```toml
 [mcp_servers.ibkr-dashboard]
-command = "/Users/your-name/cursor/ibkr-dashboard/backend/.venv/bin/python"
+command = "/绝对路径/ibkr-dashboard/.venv/bin/python"
 args = ["-m", "app.mcp_server"]
-cwd = "/Users/your-name/cursor/ibkr-dashboard/backend"
+cwd = "/绝对路径/ibkr-dashboard/backend"
 
 [mcp_servers.ibkr-dashboard.env]
 ES_BACKEND = "http"
 ES_HOST = "http://127.0.0.1:9200"
 ```
 
-如果只是开发烟测，不连接 Elasticsearch，可以临时使用：
+连接客户端前，先验证同一套配置：
 
 ```bash
-cd backend
-ES_BACKEND=in_memory .venv/bin/python -m app.mcp_server --list-tools
+cd /绝对路径/ibkr-dashboard/backend
+ES_BACKEND=http ES_HOST=http://127.0.0.1:9200 ../.venv/bin/python -m app.mcp_server --list-tools
 ```
+
+成功后会列出 `get_account_overview`、`list_positions`、`get_position_detail`、`get_portfolio_risk`、`get_market_regime`、`get_stock_analysis`、`get_performance_summary`、`list_cash_flows` 和 `get_wheel_snapshot`。查询单个持仓或个股时传入 `symbol`，支持列表限制的工具可传入 `limit`。
+
+如果客户端连不上，先核对 `command`、`cwd` 是否为绝对路径，再确认 `ES_HOST` 指向本地 Elasticsearch。工具能连上但返回缺数据时，先导入 Flex XML 或运行每日同步，再重新连接客户端。
 
 ## 数据和隐私
 
 - 真实 XML 文件不会被上传到第三方服务。
 - 应用数据默认保存在 Docker 的本地卷 `es_data` 中。
 - 删除容器不会删除数据；删除 Docker 卷才会清空数据。
-- IBKR Flex Token、Finnhub API Key、AI Provider API Key、Telegram Bot Token 等凭据只应保存在本地设置中。
+- IBKR Flex Token、Finnhub API Key、Telegram Bot Token 等凭据只应保存在本地设置中。
 - 不要把真实 XML、CSV、Excel、`.env`、API Key、Flex Token 或 Telegram Bot Token 提交到仓库。
-- 外部行情和 AI Provider 只用于读取市场数据或生成分析结果，不会触发账户交易。
+- 外部行情只用于读取市场数据，不会触发账户交易。
 
 ## 常见问题
 
@@ -873,13 +912,13 @@ docker compose down
 
 为了避免跨页面币种换算造成口径不一致，基础币种主要影响资产总览；持仓、交易、业绩等页面保留账户和 XML 的原始计价口径。
 
-### AI 或行情不可用时页面还能用吗
+### 行情不可用时页面还能用吗
 
-可以。资产、持仓、业绩和交易分析主要来自本地 Flex XML。外部行情和 AI 只增强分析结果；不可用时，页面会显示缺失、不可用或使用本地规则结果。
+可以。资产、持仓、业绩和交易分析主要来自本地 Flex XML。外部行情不可用时，页面会明确显示缺失或不可用。
 
 ## 当前限制
 
 - 长期历史行情、基准历史数据和外部行情接口依赖公开数据源可用性和频率限制。
-- 持仓分析中的外部行情、AI 摘要和市场情绪指标依赖对应 provider 的可用性。
+- 市场分析中的外部行情和市场情绪指标依赖对应 provider 的可用性。
 - Telegram 日报需要真实 Bot Token、网络连通性和运行环境支持。
 - MCP 工具只读，不支持也不计划支持交易动作。

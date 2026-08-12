@@ -184,6 +184,30 @@ class MarketAnalysisSection(BaseModel):
     narrative: AINarrativePayload
 
 
+class MarketAnalysisPayload(BaseModel):
+    status: AnalysisStatus
+    regime: StandardMetric
+    indicators: dict[str, StandardMetric] = Field(default_factory=dict)
+    market_pulse: list[dict[str, Any]] = Field(default_factory=list)
+    playbook: list[dict[str, Any]] = Field(default_factory=list)
+    strategy: list[dict[str, Any]] = Field(default_factory=list)
+    portfolio_impact: list[str] = Field(default_factory=list)
+    watch_symbols: list[str] = Field(default_factory=list)
+    opportunities: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    charts: list[EChartsPayload] = Field(default_factory=list)
+
+
+class MarketAnalysisResponse(BaseModel):
+    status: AnalysisStatus
+    generated_at: str | None = None
+    display_currency: str
+    valuation_mode: str
+    market: MarketAnalysisPayload
+    links: dict[str, str] = Field(default_factory=dict)
+
+
 class PortfolioRiskSection(BaseModel):
     status: AnalysisStatus
     concentration: dict[str, StandardMetric] = Field(default_factory=dict)

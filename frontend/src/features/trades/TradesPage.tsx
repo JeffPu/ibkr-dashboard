@@ -13,7 +13,7 @@ import {
   formatDateTimeMinute,
   formatInteger,
 } from "../../lib/format";
-import { DataState, DataTable, DeltaText, Field, MetricCard, PageHeader, PaginationFooter, SegmentedControl, StatusPill, Surface } from "../../components/Primitives";
+import { DataState, DataTable, DeltaText, Field, MetricCard, PaginationFooter, SegmentedControl, Surface } from "../../components/Primitives";
 
 type TradeQuery = {
   symbol: string;
@@ -41,12 +41,6 @@ export function TradesPage() {
 
   return (
     <div className="trades-page">
-      <PageHeader
-        eyebrow="交易明细"
-        title="交易记录与资金流水"
-        meta={<StatusPill tone="accent">只读分析</StatusPill>}
-      />
-
       <SegmentedControl
         ariaLabel="交易明细分类"
         className="trades-tabs segmented-control--compact"

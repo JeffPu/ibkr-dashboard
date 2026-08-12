@@ -90,6 +90,7 @@ class PortfolioAnalysisService:
         section: PortfolioAnalysisSectionKey | None = None,
         symbol: str | None = None,
         refresh_ai: bool = False,
+        allow_ai: bool = True,
     ) -> PortfolioAnalysisResponse:
         settings = self._settings_service.get()
         valuation_mode = "realtime" if settings.display_realtime_prices else "snapshot"
@@ -108,11 +109,11 @@ class PortfolioAnalysisService:
         positions = self._current_positions()
         selected_symbol = normalized_symbol or _largest_position_symbol(positions)
         if section in {None, PortfolioAnalysisSectionKey.MARKET}:
-            response.sections.market = self._build_market_section(positions, refresh_ai=refresh_ai)
+            response.sections.market = self._build_market_section(positions)
         if section in {None, PortfolioAnalysisSectionKey.PORTFOLIO}:
-            response.sections.portfolio = self._build_portfolio_section(positions, refresh_ai=refresh_ai)
+            response.sections.portfolio = self._build_portfolio_section(positions, refresh_ai=refresh_ai, allow_ai=allow_ai)
         if section in {None, PortfolioAnalysisSectionKey.STOCK}:
-            response.sections.stock = self._build_stock_section(positions, selected_symbol, refresh_ai=refresh_ai)
+            response.sections.stock = self._build_stock_section(positions, selected_symbol, refresh_ai=refresh_ai, allow_ai=allow_ai)
         response.integrations.ai = _active_narrative(response, section)
         response.status = _combine_status(
             [
@@ -138,7 +139,7 @@ class PortfolioAnalysisService:
         )
         return resolved_symbol
 
-    def _build_market_section(self, positions: list[dict], *, refresh_ai: bool = False):
+    def _build_market_section(self, positions: list[dict]):
         response = build_empty_portfolio_analysis_response(
             display_currency=self._settings_service.get().base_currency,
             valuation_mode="realtime" if self._settings_service.get().display_realtime_prices else "snapshot",
@@ -146,7 +147,6 @@ class PortfolioAnalysisService:
             ai_provider=self._settings_service.get().ai_provider,
         ).sections.market
         if not positions:
-            response.narrative = self._narrative("market", _market_narrative_metrics(response, positions, None), refresh_ai=refresh_ai)
             return response
 
         benchmark = _market_benchmark_for_positions(positions)
@@ -306,7 +306,6 @@ class PortfolioAnalysisService:
             put_call_proxy=put_call_proxy,
         )
         response.charts = []
-        response.narrative = self._narrative("market", _market_narrative_metrics(response, positions, benchmark), refresh_ai=refresh_ai)
         return response
 
     def _market_histories(self, symbols: list[str], *, days: int) -> dict[str, list[MarketDataPoint]]:
@@ -371,14 +370,13 @@ class PortfolioAnalysisService:
             "futu_watchlist_heat": _futu_watchlist_heat(watch_histories),
         }
 
-    def _build_portfolio_section(self, positions: list[dict], *, refresh_ai: bool = False):
+    def _build_portfolio_section(self, positions: list[dict], *, refresh_ai: bool = False, allow_ai: bool = True):
         response = build_empty_portfolio_analysis_response(
             display_currency=self._settings_service.get().base_currency,
             valuation_mode="realtime" if self._settings_service.get().display_realtime_prices else "snapshot",
             ai_provider=self._settings_service.get().ai_provider,
         ).sections.portfolio
         if not positions:
-            response.narrative = self._narrative("portfolio", {}, refresh_ai=refresh_ai)
             return response
 
         total = sum(abs(_position_value(position)) for position in positions)
@@ -499,27 +497,33 @@ class PortfolioAnalysisService:
             top3_weight=top3_weight,
             downside_breadth=downside_breadth,
         )
-        ai_overlay = self._portfolio_ai_overlay(
-            positions=positions,
-            risk_rows=response.risk_rows,
-            alerts=response.alerts,
-            total=total,
-            top3_weight=top3_weight,
-            downside_breadth=downside_breadth,
-            refresh_ai=refresh_ai,
-        )
-        response.risk_rows, response.rebalance_advice = _apply_portfolio_ai_overlay(
-            risk_rows=response.risk_rows,
-            advice=response.rebalance_advice,
-            overlay=ai_overlay,
-        )
-        response.analysis_meta = _portfolio_analysis_meta(
-            rows=response.risk_rows,
-            advice=response.rebalance_advice,
-            ai_overlay=ai_overlay,
-        )
+        if allow_ai:
+            ai_overlay = self._portfolio_ai_overlay(
+                positions=positions,
+                risk_rows=response.risk_rows,
+                alerts=response.alerts,
+                total=total,
+                top3_weight=top3_weight,
+                downside_breadth=downside_breadth,
+                refresh_ai=refresh_ai,
+            )
+            response.risk_rows, response.rebalance_advice = _apply_portfolio_ai_overlay(
+                risk_rows=response.risk_rows,
+                advice=response.rebalance_advice,
+                overlay=ai_overlay,
+            )
+            response.analysis_meta = _portfolio_analysis_meta(
+                rows=response.risk_rows,
+                advice=response.rebalance_advice,
+                ai_overlay=ai_overlay,
+            )
+            response.narrative = _portfolio_overlay_narrative(ai_overlay)
+        else:
+            response.analysis_meta = _portfolio_analysis_meta(
+                rows=response.risk_rows,
+                advice=response.rebalance_advice,
+            )
         response.charts = self._portfolio_risk_charts(positions, total)
-        response.narrative = _portfolio_overlay_narrative(ai_overlay)
         return response
 
     def _portfolio_ai_overlay(
@@ -632,7 +636,7 @@ class PortfolioAnalysisService:
     def _portfolio_risk_charts(self, positions: list[dict], total: float) -> list[EChartsPayload]:
         return [_weight_change_scatter_chart(positions, total)]
 
-    def _build_stock_section(self, positions: list[dict], symbol: str | None, *, refresh_ai: bool = False):
+    def _build_stock_section(self, positions: list[dict], symbol: str | None, *, refresh_ai: bool = False, allow_ai: bool = True):
         response = build_empty_portfolio_analysis_response(
             display_currency=self._settings_service.get().base_currency,
             valuation_mode="realtime" if self._settings_service.get().display_realtime_prices else "snapshot",
@@ -644,18 +648,15 @@ class PortfolioAnalysisService:
         if not positions:
             response.status = AnalysisStatus.MISSING_DATA
             response.memo = _stock_memo_unavailable(symbol=symbol, reason="no_current_holdings")
-            response.narrative = _stock_memo_narrative(response.memo, provider=self._settings_service.get().ai_provider)
             return response
         if not symbol:
             response.status = AnalysisStatus.MISSING_DATA
             response.memo = _stock_memo_unavailable(symbol=None, reason="selected_symbol_required")
-            response.narrative = _stock_memo_narrative(response.memo, provider=self._settings_service.get().ai_provider)
             return response
         position = next((item for item in positions if str(item.get("symbol", "")).upper() == symbol), None)
         if not position:
             response.status = AnalysisStatus.UNAVAILABLE
             response.memo = _stock_memo_unavailable(symbol=symbol, reason="selected_symbol_not_in_current_holdings")
-            response.narrative = _stock_memo_narrative(response.memo, provider=self._settings_service.get().ai_provider)
             return response
 
         metrics = _stock_memo_metrics(
@@ -666,6 +667,10 @@ class PortfolioAnalysisService:
             display_currency=self._settings_service.get().base_currency,
             industry=self._position_industry(position),
         )
+        if not allow_ai:
+            response.memo = _local_stock_memo(metrics, reason="model_analysis_disabled")
+            response.status = response.memo.status
+            return response
         memo_payload = self._stock_ai_memo(metrics=metrics, symbol=symbol, refresh_ai=refresh_ai)
         response.memo = _coerce_stock_memo(memo_payload, metrics=metrics)
         response.status = response.memo.status
@@ -1416,7 +1421,7 @@ def _portfolio_analysis_meta(
     overlay = ai_overlay if isinstance(ai_overlay, dict) else {}
     researched = [row for row in rows if row.research_status == "ready" and row.sources]
     missing = [row.position_key for row in rows if row.research_status != "ready" or not row.sources]
-    return {
+    result = {
         "status": advice.status.value,
         "source": advice.source,
         "confidence": advice.confidence,
@@ -1427,11 +1432,17 @@ def _portfolio_analysis_meta(
         "researched_position_count": len(researched),
         "research_source_count": sum(len(row.sources) for row in researched),
         "missing_reasons": [f"{key}:research_missing" for key in missing[:8]],
-        "ai_overlay_status": overlay.get("status") or AnalysisStatus.UNAVAILABLE.value,
-        "ai_overlay_provider": overlay.get("provider"),
-        "ai_overlay_model": overlay.get("model"),
-        "ai_overlay_reason": overlay.get("reason"),
     }
+    if overlay:
+        result.update(
+            {
+                "ai_overlay_status": overlay.get("status") or AnalysisStatus.UNAVAILABLE.value,
+                "ai_overlay_provider": overlay.get("provider"),
+                "ai_overlay_model": overlay.get("model"),
+                "ai_overlay_reason": overlay.get("reason"),
+            }
+        )
+    return result
 
 
 def _portfolio_overlay_metrics(

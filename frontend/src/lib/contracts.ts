@@ -127,19 +127,6 @@ export interface EChartsPayload {
   options: ApiRecord;
 }
 
-export interface AINarrativePayload {
-  provider: string;
-  model: string | null;
-  status: AnalysisStatus;
-  summary: string | null;
-  bullets: string[];
-  risks: string[];
-  source_metrics: string[];
-  as_of: string | null;
-  confidence: number | null;
-  reason: string | null;
-}
-
 export interface TelegramStatusPayload {
   enabled: boolean;
   status: AnalysisStatus;
@@ -172,7 +159,6 @@ export interface MarketAnalysisSection {
   reasons: string[];
   risks: string[];
   charts: EChartsPayload[];
-  narrative: AINarrativePayload;
 }
 
 export interface PortfolioRiskRow {
@@ -227,22 +213,6 @@ export interface PortfolioRebalanceAdvice {
   reason: string | null;
 }
 
-export interface PortfolioRefreshJob {
-  job_id: string;
-  status: "accepted" | "running" | "ready" | "fallback" | "error";
-  stage: "accepted" | "preparing_inputs" | "researching_web" | "analyzing_risks" | "persisting" | "ready" | "fallback" | "error";
-  section: PortfolioAnalysisSectionKey;
-  symbol: string | null;
-  message: string;
-  started_at: string;
-  updated_at: string;
-  completed_positions: number;
-  total_positions: number;
-  stage_durations_ms: Record<string, number>;
-  reason: string | null;
-  failed_stage: PortfolioRefreshJob["stage"] | null;
-}
-
 export interface PortfolioRiskSection {
   status: AnalysisStatus;
   concentration: Record<string, StandardMetric>;
@@ -259,7 +229,6 @@ export interface PortfolioRiskSection {
   rebalance_advice: PortfolioRebalanceAdvice;
   analysis_meta: ApiRecord;
   charts: EChartsPayload[];
-  narrative: AINarrativePayload;
 }
 
 export interface StockSelectionOption {
@@ -308,29 +277,14 @@ export interface StockAnalysisSection {
   evidence_links: Array<{ label: string; url: string }>;
   risks: string[];
   charts: EChartsPayload[];
-  narrative: AINarrativePayload;
 }
 
 export interface PortfolioAnalysisResponse {
   status: AnalysisStatus;
-  active_section: PortfolioAnalysisSectionKey | null;
   generated_at: string | null;
   display_currency: string;
   valuation_mode: string;
-  request: {
-    section: PortfolioAnalysisSectionKey | null;
-    symbol: string | null;
-  };
-  sections: {
-    market: MarketAnalysisSection;
-    portfolio: PortfolioRiskSection;
-    stock: StockAnalysisSection;
-  };
-  integrations: {
-    ai: AINarrativePayload;
-    telegram: TelegramStatusPayload;
-    mcp_tools: MCPToolPayload[];
-  };
+  market: MarketAnalysisSection;
   links: Record<string, string>;
 }
 
@@ -478,7 +432,6 @@ export interface OverviewResponse extends ApiRecord {
   benchmark_series?: ApiRecord[];
   asset_metric_rows?: ApiRecord[];
   recent_trades?: ApiRecord[];
-  ai_summary?: ApiRecord;
   net_value_curve?: ApiRecord;
   ui_summary?: OverviewUiSummary;
   risk_dashboard?: OverviewRiskDashboard;
@@ -504,24 +457,7 @@ export interface OverviewResponse extends ApiRecord {
   };
 }
 
-export type AiProvider = "openai" | "minimax" | "deepseek" | "mock";
-
 export type FutuConnectionMode = "disabled" | "local_opend" | "longbridge";
-
-export interface AiModelOption {
-  value: string;
-  label: string;
-}
-
-export interface AiModelProviderCatalog {
-  provider: AiProvider;
-  default_model: string;
-  models: AiModelOption[];
-}
-
-export interface AiModelCatalogResponse {
-  providers: AiModelProviderCatalog[];
-}
 
 export interface SettingsResponse {
   base_currency: string;
@@ -531,14 +467,6 @@ export interface SettingsResponse {
   flex_query_id: string;
   pull_frequency_minutes: number;
   display_realtime_prices: boolean;
-  ai_provider: AiProvider;
-  ai_model: string;
-  openai_api_key: string;
-  minimax_api_key: string;
-  minimax_base_url: string;
-  deepseek_api_key: string;
-  deepseek_base_url: string;
-  tavily_api_key: string;
   futu_connection_mode: FutuConnectionMode;
   futu_opend_host: string;
   futu_opend_port: number;
