@@ -392,7 +392,7 @@ The MCP server is a stdio process that exposes local, read-only dashboard data t
 Before configuring a client:
 
 1. Start local Elasticsearch and the dashboard, then import at least one Flex XML file.
-2. The examples below use the project-root `.venv` created by `npm run dev:all`. In **Settings and Import**, enable **MCP Server** and click **Save All** to record the local preference. Your client still starts the stdio process itself.
+2. The examples below use the project-root `.venv` created by `npm run dev:all`. MCP has no dashboard switch; configure it in the client, which starts the local stdio process itself.
 3. Replace every placeholder with the absolute path of this checkout. The MCP process reads Elasticsearch directly. It does not connect through the web UI on port `5176` or the API on port `8085`.
 4. After saving the client configuration, restart or reconnect the client.
 
@@ -851,7 +851,7 @@ MCP server 是 stdio 进程，把本地看板的只读数据暴露给支持的�
 接入客户端前：
 
 1. 启动本地 Elasticsearch 和看板，并完成至少一次 Flex XML 导入。
-2. 下方示例使用 `npm run dev:all` 在项目根目录创建的 `.venv`。在“设置与导入”中打开“MCP Server”并点击“保存全部”，用于记录本地接入偏好；客户端仍会自行启动 stdio 进程。
+2. 下方示例使用 `npm run dev:all` 在项目根目录创建的 `.venv`。MCP 不设看板开关；请直接在客户端中配置，由客户端自行启动本地 stdio 进程。
 3. 将示例中的占位路径替换为当前项目的绝对路径。MCP 进程直接读取 Elasticsearch，不经过 `5176` 端口的网页或 `8085` 端口的 API。
 4. 保存客户端配置后，重启或重新连接客户端。
 

@@ -8,7 +8,7 @@ import type {
 } from "../../lib/contracts";
 import { asArray, asNumber, asText, formatDateTimeMinute, formatInteger } from "../../lib/format";
 import { useApiData } from "../../lib/useApiData";
-import { DataState, DataTable, EmptyState, Field, MetricCard, StatusPill, Surface } from "../../components/Primitives";
+import { DataState, DataTable, Field, MetricCard, StatusPill, Surface } from "../../components/Primitives";
 
 interface SettingsForm {
   base_currency: string;
@@ -215,9 +215,7 @@ export function SettingsPage() {
                     <MetricCard label="处理文件" value={`${formatInteger(importResult.processed_files)} / ${formatInteger(importResult.total_files)}`} />
                     <MetricCard label="进度" value={`${Math.round(asNumber(importResult.progress, 0) * 100)}%`} />
                   </div>
-                ) : (
-                  <EmptyState title="等待导入" detail="选择 XML 后开始解析" compact />
-                )}
+                ) : null}
               </Surface>
 
               <Surface title="同步与数据刷新" className="settings-panel settings-panel--actions">
@@ -295,9 +293,10 @@ export function SettingsPage() {
                   </Field>
                   <Field label="Telegram Chat IDs">
                     <textarea
+                      className="settings-chat-ids"
                       value={form.telegram_allowlisted_chat_ids}
                       onChange={(event) => setForm({ ...form, telegram_allowlisted_chat_ids: event.target.value })}
-                      rows={3}
+                      rows={2}
                     />
                   </Field>
                   <label className="settings-checkbox-field">

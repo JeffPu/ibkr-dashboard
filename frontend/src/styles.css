@@ -1057,6 +1057,10 @@ input[type="file"] {
   min-height: 64px;
 }
 
+.settings-panel .field textarea.settings-chat-ids {
+  min-height: 48px;
+}
+
 .settings-panel .field input[type="file"] {
   max-width: 280px;
 }
