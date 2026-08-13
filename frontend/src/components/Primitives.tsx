@@ -2,29 +2,6 @@ import type { ReactNode } from "react";
 import type { ApiRecord } from "../lib/contracts";
 import { asText, deltaClass, formatCurrency, formatNumber } from "../lib/format";
 
-export function PageHeader({
-  eyebrow,
-  title,
-  description,
-  meta,
-}: {
-  eyebrow: string;
-  title: string;
-  description?: string;
-  meta?: ReactNode;
-}) {
-  return (
-    <header className="page-header">
-      <div>
-        <span className="eyebrow">{eyebrow}</span>
-        <h1>{title}</h1>
-        {description ? <p>{description}</p> : null}
-      </div>
-      {meta ? <div className="page-header__meta">{meta}</div> : null}
-    </header>
-  );
-}
-
 export function Surface({
   title,
   subtitle,
@@ -59,18 +36,18 @@ export function MetricCard({
   value,
   hint,
   tone = "neutral",
-  variant = "default",
+  variant,
   className = "",
 }: {
   label: string;
   value: ReactNode;
   hint?: ReactNode;
   tone?: "neutral" | "positive" | "negative" | "accent";
-  variant?: "default" | "primary" | "compact";
+  variant?: "compact";
   className?: string;
 }) {
   return (
-    <div className={`metric-card metric-card--${tone} metric-card--${variant} ${className}`.trim()}>
+    <div className={`metric-card metric-card--${tone} ${variant ? `metric-card--${variant}` : ""} ${className}`.trim()}>
       <span>{label}</span>
       <strong>{value}</strong>
       {hint ? <small>{hint}</small> : null}
@@ -84,7 +61,7 @@ export function StatusPill({
   className = "",
 }: {
   children: ReactNode;
-  tone?: "neutral" | "positive" | "negative" | "accent";
+  tone?: "neutral" | "positive";
   className?: string;
 }) {
   return <span className={`status-pill status-pill--${tone} ${className}`.trim()}>{children}</span>;
@@ -193,27 +170,6 @@ export function SegmentedControl<T extends string>({
   );
 }
 
-export function Pager({
-  page,
-  pageSize,
-  total,
-  onPageChange,
-}: {
-  page: number;
-  pageSize: number;
-  total: number;
-  onPageChange: (page: number) => void;
-}) {
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  return (
-    <div className="pager">
-      <button type="button" onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page <= 1}>上一页</button>
-      <span>第 {page} / {pageCount} 页</span>
-      <button type="button" onClick={() => onPageChange(Math.min(pageCount, page + 1))} disabled={page >= pageCount}>下一页</button>
-    </div>
-  );
-}
-
 export function PaginationFooter({
   page,
   pageSize,
@@ -231,6 +187,7 @@ export function PaginationFooter({
   pageSizeOptions?: number[];
   className?: string;
 }) {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
   return (
     <div className={className}>
       <Field label="每页">
@@ -238,7 +195,11 @@ export function PaginationFooter({
           {pageSizeOptions.map((option) => <option key={option} value={option}>{option}</option>)}
         </select>
       </Field>
-      <Pager page={page} pageSize={pageSize} total={total} onPageChange={onPageChange} />
+      <div className="pager">
+        <button type="button" onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page <= 1}>上一页</button>
+        <span>第 {page} / {pageCount} 页</span>
+        <button type="button" onClick={() => onPageChange(Math.min(pageCount, page + 1))} disabled={page >= pageCount}>下一页</button>
+      </div>
     </div>
   );
 }

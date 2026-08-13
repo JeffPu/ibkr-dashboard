@@ -4,7 +4,6 @@ from fastapi import APIRouter
 from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
 from app.services.market_data_provider import build_market_data_provider
 from app.services.portfolio_analysis_service import PortfolioAnalysisService
-from app.services.quote_service import QuoteService
 from app.services.settings_service import SettingsService
 from app.services.telegram_service import TelegramCommandService
 
@@ -12,7 +11,6 @@ from app.services.telegram_service import TelegramCommandService
 router = APIRouter()
 _settings_service: SettingsService = SettingsService()
 _raw_repository: object | None = None
-_quote_service: QuoteService | None = None
 
 
 class TelegramDryRunRequest(BaseModel):
@@ -28,11 +26,6 @@ def set_settings_service(service: SettingsService) -> None:
 def set_raw_repository(repository: object | None) -> None:
     global _raw_repository
     _raw_repository = repository
-
-
-def set_quote_service(service: QuoteService | None) -> None:
-    global _quote_service
-    _quote_service = service
 
 
 @router.post("/api/telegram/commands/dry-run", responses=STORAGE_UNAVAILABLE_OPENAPI_RESPONSE)
@@ -57,7 +50,7 @@ def dry_run_telegram_report() -> dict[str, object]:
 
 def _telegram_command_service() -> TelegramCommandService:
     settings = _settings_service.get()
-    provider = build_market_data_provider(settings, _quote_service)
+    provider = build_market_data_provider(settings)
     analysis_service = PortfolioAnalysisService(
         raw_repository=_raw_repository,
         settings_service=_settings_service,
@@ -67,5 +60,4 @@ def _telegram_command_service() -> TelegramCommandService:
         settings_service=_settings_service,
         analysis_service=analysis_service,
         raw_repository=_raw_repository,
-        market_data_provider=provider,
     )

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import type { MouseEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
+import type { EChartsOption } from "echarts";
 import { api } from "../../lib/api";
 import type { ApiRecord, OverviewResponse, PageKey } from "../../lib/contracts";
 import { useApiData } from "../../lib/useApiData";
 import { addDays, addMonths, asArray, asNumber, asRecord, asText, clamp, dateFromIso, dateToTime, daysBetween, deltaClass, formatCurrency, formatDate, formatDateTimeMinute, formatNumber, formatPercent, isoFromDate, normalizeIsoDate } from "../../lib/format";
 import { DataState, DataTable, MetricCard, SegmentedControl, Surface } from "../../components/Primitives";
+import { EChart } from "../../components/charts/EChart";
 import { OverviewBetaStress, OverviewRiskDashboard } from "./OverviewRiskWarning";
 
 type ReturnMethod = "simple" | "twr" | "cash";
@@ -40,12 +42,6 @@ interface ChartSeries {
   color: string;
   points: Array<{ date: string; value: number; netValue?: number }>;
 }
-
-const METHOD_OPTIONS: Array<{ key: ReturnMethod; label: string }> = [
-  { key: "simple", label: "简单加权" },
-  { key: "twr", label: "时间加权" },
-  { key: "cash", label: "现金加权" },
-];
 
 const RANGE_OPTIONS: Array<{ key: RangeKey; label: string }> = [
   { key: "1w", label: "1周" },
@@ -135,12 +131,6 @@ function OverviewContent({
   const [customEnd, setCustomEnd] = useState("");
   const currency = asText(data.display_currency, "USD");
   const uiSummary = data.ui_summary;
-  const valuationMode = uiSummary?.valuation_mode ?? asText(data.valuation_mode, "snapshot");
-  const valuationTime = valuationMode === "realtime"
-    ? formatDateTimeMinute(data.valuation_as_of_local ?? data.valuation_as_of)
-    : formatDate(data.report_date_iso ?? data.report_date);
-  const fallbackValuationHint = valuationMode === "realtime" ? `实时价格 ${valuationTime}` : `XML 快照 ${valuationTime}`;
-  const valuationHint = uiSummary?.valuation_label ?? fallbackValuationHint;
   const netValueCurve = asRecord(data.net_value_curve);
   const curveRows = useMemo(() => {
     const rows = asArray(netValueCurve.rows).length > 0 ? asArray(netValueCurve.rows) : asArray(data.equity_curve);
@@ -474,7 +464,6 @@ function TrendChart({
   emptyTitle: string;
   emptyDetail: string;
 }) {
-  const [hoverState, setHoverState] = useState<{ x: number; time: number; date: string } | null>(null);
   const mainSeries = series[0];
   const mainPoints = mainSeries?.points ?? [];
   if (mainPoints.length < 2) {
@@ -489,181 +478,98 @@ function TrendChart({
     );
   }
 
-  const width = 960;
-  const height = 380;
-  const padding = { top: 56, right: 24, bottom: 30, left: 58 };
-  const plotWidth = width - padding.left - padding.right;
-  const plotHeight = height - padding.top - padding.bottom;
-  const values = series.flatMap((line) => line.points.map((point) => point.value)).filter(Number.isFinite);
-  const returnAxis = getReturnAxis(values);
-  const yMin = returnAxis.min;
-  const yMax = returnAxis.max;
-  const yRange = yMax - yMin || 1;
-  const pointTimes = mainPoints.map((point) => dateToTime(point.date)).filter(Number.isFinite);
-  const minTime = pointTimes[0] ?? 0;
-  const maxTime = pointTimes[pointTimes.length - 1] ?? minTime + 1;
-  const timeRange = maxTime - minTime || 1;
-  const scaleXByTime = (time: number) => padding.left + clamp((time - minTime) / timeRange, 0, 1) * plotWidth;
-  const scaleXByDate = (date: string) => scaleXByTime(dateToTime(date));
-  const indexForDate = (date: string) => {
-    const target = dateToTime(date);
-    let nearest = 0;
-    let nearestDistance = Number.POSITIVE_INFINITY;
-    mainPoints.forEach((point, index) => {
-      const distance = Math.abs(dateToTime(point.date) - target);
-      if (distance < nearestDistance) {
-        nearest = index;
-        nearestDistance = distance;
-      }
-    });
-    return nearest;
-  };
-  const scaleY = (value: number) => padding.top + (1 - ((value - yMin) / yRange)) * plotHeight;
-  const linePath = (points: Array<{ date: string; value: number; netValue?: number }>) => points
-    .map((point, index) => `${index === 0 ? "M" : "L"} ${scaleXByDate(point.date).toFixed(2)} ${scaleY(point.value).toFixed(2)}`)
-    .join(" ");
-  const gridValues = returnAxis.ticks;
-  const hoverPoint = hoverState ? interpolatePointAtTime(mainPoints, hoverState.time, hoverState.date) : null;
-  const hoverX = hoverState?.x ?? 0;
-  const hoverY = hoverPoint ? scaleY(hoverPoint.value) : 0;
-  const tooltipClassName = `chart-tooltip ${hoverX > padding.left + plotWidth - 230 ? "chart-tooltip--left" : ""}`.trim();
-  const tooltipY = clamp(hoverY, padding.top + 82, height - padding.bottom - 82);
-
-  const handleMouseMove = (event: MouseEvent<SVGSVGElement>) => {
-    const svgPoint = clientPointToSvgPoint(event.currentTarget, event);
-    const x = clamp(svgPoint.x, padding.left, width - padding.right);
-    const targetTime = minTime + ((x - padding.left) / plotWidth) * timeRange;
-    setHoverState({ x, time: targetTime, date: isoFromDate(new Date(targetTime)) });
+  const dates = Array.from(new Set(series.flatMap((line) => line.points.map((point) => point.date)))).sort();
+  const pointBySeriesDate = new Map(
+    series.flatMap((line) => line.points.map((point) => [`${line.key}|${point.date}`, point] as const)),
+  );
+  const chartEvents = events.map((event) => ({
+    event,
+    chartDate: mainPoints.reduce(
+      (nearest, point) => Math.abs(dateToTime(point.date) - dateToTime(event.date))
+        < Math.abs(dateToTime(nearest) - dateToTime(event.date)) ? point.date : nearest,
+      mainPoints[0].date,
+    ),
+  }));
+  const eventByDate = new Map<string, FlowEvent[]>();
+  chartEvents.forEach(({ event, chartDate }) => {
+    eventByDate.set(chartDate, [...(eventByDate.get(chartDate) ?? []), event]);
+  });
+  const option: EChartsOption = {
+    animationDuration: 240,
+    aria: { enabled: true, decal: { show: true } },
+    color: series.map((line) => line.color),
+    grid: { left: 18, right: 18, top: 72, bottom: 30, containLabel: true },
+    legend: {
+      top: 12,
+      right: 12,
+      data: series.map((line) => line.label),
+      textStyle: { color: "#5d6558", fontSize: 11, fontWeight: 700 },
+    },
+    tooltip: {
+      trigger: "axis",
+      renderMode: "richText",
+      axisPointer: { type: "line" },
+      formatter: (params) => {
+        const items = Array.isArray(params) ? params : [params];
+        const dataIndex = asNumber((items[0] as { dataIndex?: unknown }).dataIndex, 0);
+        const date = dates[dataIndex] ?? "";
+        const portfolioPoint = pointBySeriesDate.get(`${mainSeries.key}|${date}`);
+        const lines = [
+          formatDate(date),
+          portfolioPoint?.netValue === undefined ? "" : `账户净值 ${formatCurrency(portfolioPoint.netValue, currency)}`,
+          ...items.map((item) => {
+            const shaped = item as { seriesName?: string; value?: unknown };
+            return `${shaped.seriesName ?? ""} ${formatPercent(asNumber(shaped.value, 0))}`;
+          }),
+          ...(eventByDate.get(date) ?? []).map((event) => (
+            `${event.date === date ? "" : `${formatDate(event.date)} `}${event.label} ${formatCurrency(event.amount, currency)}`
+          )),
+        ];
+        return lines.filter(Boolean).join("\n");
+      },
+    },
+    xAxis: {
+      type: "category",
+      boundaryGap: false,
+      data: dates,
+      axisLabel: { color: "#697067", formatter: (value: string) => formatDate(value).slice(5), hideOverlap: true },
+      axisLine: { lineStyle: { color: "rgba(32,35,31,0.24)" } },
+    },
+    yAxis: {
+      type: "value",
+      axisLabel: { color: "#697067", formatter: (value: number) => formatPercent(value) },
+      splitLine: { lineStyle: { color: "rgba(32,35,31,0.1)", type: "dashed" } },
+    },
+    series: series.map((line, index) => ({
+      name: line.label,
+      type: "line",
+      data: dates.map((date) => pointBySeriesDate.get(`${line.key}|${date}`)?.value ?? null),
+      connectNulls: true,
+      showSymbol: false,
+      lineStyle: { width: index === 0 ? 3.5 : 2, type: index === 0 ? "solid" : "dashed" },
+      markPoint: index === 0 && events.length ? {
+        symbolSize: 30,
+        label: { color: "#fff", fontSize: 10, formatter: (params) => String((params as { data?: { value?: unknown } }).data?.value ?? "") },
+        data: chartEvents.flatMap(({ event, chartDate }) => {
+          const point = pointBySeriesDate.get(`${mainSeries.key}|${chartDate}`);
+          if (!point) return [];
+          return [{
+            name: event.label,
+            value: event.flowType === "inflow" ? "入" : "出",
+            coord: [chartDate, point.value],
+            itemStyle: { color: event.flowType === "inflow" ? "#0f7a4d" : "#c23a32" },
+          }];
+        }),
+      } : undefined,
+    })),
   };
 
   return (
     <div className="chart-frame">
       <div className="chart-kpi">{summary}</div>
-      <div className="chart-legend chart-legend--overlay" aria-label="净值曲线图例">
-        {series.map((line) => (
-          <span key={line.key}>
-            <i
-              className={line.key === mainSeries.key ? "chart-legend__line" : "chart-legend__line chart-legend__line--dashed"}
-              style={{ backgroundColor: line.key === mainSeries.key ? line.color : undefined, borderColor: line.color }}
-            />
-            {line.label}
-          </span>
-        ))}
-      </div>
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        preserveAspectRatio="none"
-        role="img"
-        aria-label="趋势曲线"
-        onMouseMove={handleMouseMove}
-        onMouseLeave={() => setHoverState(null)}
-      >
-        <defs>
-          <clipPath id="return-chart-plot-area">
-            <rect x={padding.left} y={padding.top} width={plotWidth} height={plotHeight} />
-          </clipPath>
-        </defs>
-        <rect x="0" y="0" width={width} height={height} rx="8" />
-        {gridValues.map((value) => {
-          const y = scaleY(value);
-          return (
-            <g key={value}>
-              <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} className="chart-grid-line" />
-              <text x={padding.left - 12} y={y + 4} className="chart-axis-label" textAnchor="end">{formatPercent(value)}</text>
-            </g>
-          );
-        })}
-        {yMin < 0 && yMax > 0 ? (
-          <line
-            x1={padding.left}
-            x2={width - padding.right}
-            y1={scaleY(0)}
-            y2={scaleY(0)}
-            className="chart-zero-line"
-          />
-        ) : null}
-        {mainPoints.map((point, index) => {
-          if (index % Math.max(Math.ceil(mainPoints.length / 4), 1) !== 0 && index !== mainPoints.length - 1) return null;
-          const x = scaleXByDate(point.date);
-          return (
-            <text key={point.date} x={x} y={height - 10} className="chart-axis-label" textAnchor={index === 0 ? "start" : index === mainPoints.length - 1 ? "end" : "middle"}>
-              {formatDate(point.date).slice(5)}
-            </text>
-          );
-        })}
-        <g clipPath="url(#return-chart-plot-area)">
-          {series.map((line) => (
-            <path
-              key={line.key}
-              d={linePath(line.points)}
-              fill="none"
-              stroke={line.color}
-              strokeWidth={line.key === mainSeries.key ? 3.5 : 2}
-              strokeDasharray={line.key === mainSeries.key ? undefined : "8 7"}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="chart-line"
-            />
-          ))}
-          {events.map((event) => {
-            const x = scaleXByDate(event.date);
-            const point = mainPoints[indexForDate(event.date)];
-            const y = scaleY(point.value);
-            return (
-              <g key={`${event.date}-${event.amount}`} className={`cashflow-marker cashflow-marker--${event.flowType}`}>
-                <line x1={x} x2={x} y1={padding.top} y2={height - padding.bottom} />
-                <circle cx={x} cy={y} r="5" />
-              </g>
-            );
-          })}
-          {hoverPoint ? (
-            <g className="chart-hover-layer">
-              <line x1={hoverX} x2={hoverX} y1={padding.top} y2={height - padding.bottom} />
-              <circle cx={hoverX} cy={hoverY} r="5" />
-            </g>
-          ) : null}
-          <rect
-            x={padding.left}
-            y={padding.top}
-            width={plotWidth}
-            height={plotHeight}
-            className="chart-hover-capture"
-          />
-        </g>
-      </svg>
-      {hoverPoint ? (
-        <div
-          className={tooltipClassName}
-          style={{ left: `${(hoverX / width) * 100}%`, top: `${(tooltipY / height) * 100}%` }}
-        >
-          <strong>{formatDate(hoverPoint.date)}</strong>
-          <span>账户净值 {formatCurrency(hoverPoint.netValue, currency)}</span>
-          {series.map((line) => {
-            const point = hoverState ? interpolatePointAtTime(line.points, hoverState.time, hoverState.date) : null;
-            if (!point) return null;
-            return <span key={line.key}>{line.label} {formatPercent(point.value)}</span>;
-          })}
-        </div>
-      ) : null}
+      <EChart option={option} height={340} ariaLabel="账户净值与基准收益趋势图；悬停可查看日期、账户净值、各序列收益和资金事件" />
     </div>
   );
-}
-
-function clientPointToSvgPoint(svg: SVGSVGElement, event: MouseEvent<SVGSVGElement>) {
-  const matrix = svg.getScreenCTM();
-  if (matrix) {
-    const point = svg.createSVGPoint();
-    point.x = event.clientX;
-    point.y = event.clientY;
-    const transformed = point.matrixTransform(matrix.inverse());
-    return { x: transformed.x, y: transformed.y };
-  }
-  const rect = svg.getBoundingClientRect();
-  const viewBox = svg.viewBox.baseVal;
-  return {
-    x: viewBox.x + ((event.clientX - rect.left) / rect.width) * viewBox.width,
-    y: viewBox.y + ((event.clientY - rect.top) / rect.height) * viewBox.height,
-  };
 }
 
 function ChartKpi({ label, value, tone }: { label: string; value: ReactNode; tone: "neutral" | "positive" | "negative" | "accent" }) {
@@ -771,69 +677,6 @@ function buildBenchmarkReturnSeries(benchmarks: BenchmarkSeries[], selectedRange
       };
     })
     .filter((series): series is ChartSeries => Boolean(series));
-}
-
-function getReturnAxis(values: number[]): { min: number; max: number; ticks: number[] } {
-  const finiteValues = values.filter(Number.isFinite);
-  if (finiteValues.length === 0) {
-    return { min: -0.01, max: 0.01, ticks: [-0.01, 0, 0.01] };
-  }
-
-  let rawMin = Math.min(0, ...finiteValues);
-  let rawMax = Math.max(0, ...finiteValues);
-  if (Math.abs(rawMax - rawMin) < 1e-9) {
-    const pad = Math.max(Math.abs(rawMax) * 0.12, 0.01);
-    rawMin -= pad;
-    rawMax += pad;
-  }
-
-  const rawRange = rawMax - rawMin;
-  const pad = Math.max(rawRange * 0.025, 0.001);
-  const min = normalizeTick(rawMin < 0 ? rawMin - pad : rawMin);
-  const max = normalizeTick(rawMax > 0 ? rawMax + pad : rawMax);
-  const tickCount = 5;
-  const ticks = Array.from({ length: tickCount }, (_, index) => (
-    normalizeTick(min + ((max - min) * index) / (tickCount - 1))
-  ));
-  return { min, max, ticks };
-}
-
-function normalizeTick(value: number): number {
-  const normalized = Number(value.toFixed(8));
-  return Math.abs(normalized) < 1e-10 ? 0 : normalized;
-}
-
-function interpolatePointAtTime(
-  points: Array<{ date: string; value: number; netValue?: number }>,
-  time: number,
-  displayDate?: string,
-) {
-  if (points.length === 0) return null;
-  const first = points[0];
-  const firstTime = dateToTime(first.date);
-  if (time <= firstTime) return first;
-
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1];
-    const current = points[index];
-    const previousTime = dateToTime(previous.date);
-    const currentTime = dateToTime(current.date);
-    if (time > currentTime) continue;
-    const span = currentTime - previousTime || 1;
-    const ratio = clamp((time - previousTime) / span, 0, 1);
-    return {
-      date: displayDate ?? isoFromDate(new Date(time)),
-      value: previous.value + (current.value - previous.value) * ratio,
-      netValue: interpolateOptionalNumber(previous.netValue, current.netValue, ratio),
-    };
-  }
-
-  return points[points.length - 1];
-}
-
-function interpolateOptionalNumber(previous: number | undefined, current: number | undefined, ratio: number) {
-  if (previous === undefined || current === undefined) return previous ?? current;
-  return previous + (current - previous) * ratio;
 }
 
 function selectRange(points: CurvePoint[], range: RangeKey, customStart: string, customEnd: string) {

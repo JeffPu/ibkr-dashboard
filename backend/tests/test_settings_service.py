@@ -42,9 +42,6 @@ def test_service_loads_settings_from_repository() -> None:
             "telegram_allowlisted_chat_ids": ["123456789"],
             "telegram_reports_enabled": True,
             "telegram_daily_report_time": "09:30",
-            "mcp_server_enabled": True,
-            "report_cache_enabled": True,
-            "report_cache_ttl_minutes": 120,
         }
     )
     service = SettingsService(repository=repo)
@@ -71,9 +68,6 @@ def test_service_loads_settings_from_repository() -> None:
     assert current.telegram_allowlisted_chat_ids == ["123456789"]
     assert current.telegram_reports_enabled is True
     assert current.telegram_daily_report_time == "09:30"
-    assert current.mcp_server_enabled is True
-    assert current.report_cache_enabled is True
-    assert current.report_cache_ttl_minutes == 120
 
 
 def test_service_ignores_unknown_repository_fields() -> None:
@@ -116,9 +110,6 @@ def test_service_update_persists_settings_into_repository(monkeypatch) -> None:
         telegram_allowlisted_chat_ids=["123456789"],
         telegram_reports_enabled=True,
         telegram_daily_report_time="10:00",
-        mcp_server_enabled=True,
-        report_cache_enabled=False,
-        report_cache_ttl_minutes=30,
     )
 
     assert updated.base_currency == "CNY"
@@ -129,7 +120,6 @@ def test_service_update_persists_settings_into_repository(monkeypatch) -> None:
     assert updated.ai_provider == "mock"
     assert updated.ai_model == "mock"
     assert updated.telegram_allowlisted_chat_ids == ["123456789"]
-    assert updated.report_cache_enabled is False
     assert len(repo.updated_docs) == 1
     assert repo.updated_docs[0]["base_currency"] == "CNY"
     assert repo.updated_docs[0]["display_realtime_prices"] is False
@@ -148,7 +138,6 @@ def test_service_update_persists_settings_into_repository(monkeypatch) -> None:
     assert repo.updated_docs[0]["telegram_bot_token"].startswith(ENCRYPTED_SECRET_PREFIX)
     assert repo.updated_docs[0]["telegram_bot_token"] != "telegram-token"
     assert repo.updated_docs[0]["telegram_allowlisted_chat_ids"] == ["123456789"]
-    assert repo.updated_docs[0]["report_cache_ttl_minutes"] == 30
 
     loaded = SettingsService(repository=repo).get()
     assert loaded.openai_api_key == "sk-test"

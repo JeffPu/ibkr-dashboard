@@ -1,33 +1,45 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { EChartsOption } from "echarts";
 import * as echarts from "echarts/core";
-import { BarChart, GaugeChart, HeatmapChart, LineChart, RadarChart, ScatterChart } from "echarts/charts";
-import { GridComponent, LegendComponent, RadarComponent, TooltipComponent, VisualMapComponent } from "echarts/components";
+import { BarChart, CandlestickChart, LineChart, PieChart, ScatterChart } from "echarts/charts";
+import {
+  AriaComponent,
+  AxisPointerComponent,
+  DataZoomComponent,
+  GridComponent,
+  LegendComponent,
+  MarkPointComponent,
+  TooltipComponent,
+} from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
 echarts.use([
+  AriaComponent,
+  AxisPointerComponent,
   BarChart,
-  GaugeChart,
-  HeatmapChart,
+  CandlestickChart,
+  DataZoomComponent,
   GridComponent,
   LegendComponent,
+  MarkPointComponent,
   LineChart,
-  RadarChart,
+  PieChart,
   ScatterChart,
-  RadarComponent,
   TooltipComponent,
-  VisualMapComponent,
   CanvasRenderer,
 ]);
 
 export function EChart({
   option,
   height = 280,
+  ariaLabel,
 }: {
   option: EChartsOption;
   height?: number;
+  ariaLabel: string;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null);
   const theme = useMemo(() => ({
     color: ["#ff3b30", "#111111", "#4b5563", "#d97706", "#047857"],
     textStyle: {
@@ -39,24 +51,19 @@ export function EChart({
   useEffect(() => {
     if (!ref.current) return undefined;
     const chart = echarts.init(ref.current, theme);
-    chart.setOption(option, true);
+    chartRef.current = chart;
     const resize = () => chart.resize();
     window.addEventListener("resize", resize);
     return () => {
       window.removeEventListener("resize", resize);
       chart.dispose();
+      chartRef.current = null;
     };
-  }, [option, theme]);
+  }, [theme]);
 
-  return <div className="echart-canvas" ref={ref} style={{ height }} />;
-}
+  useEffect(() => {
+    chartRef.current?.setOption(option, true);
+  }, [option]);
 
-export function baseGrid() {
-  return {
-    left: 44,
-    right: 20,
-    top: 34,
-    bottom: 36,
-    containLabel: true,
-  };
+  return <div className="echart-canvas" ref={ref} style={{ height }} role="img" aria-label={ariaLabel} tabIndex={0} />;
 }

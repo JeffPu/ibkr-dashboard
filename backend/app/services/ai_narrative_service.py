@@ -14,7 +14,6 @@ import re
 
 import httpx
 
-from app.api.portfolio_analysis_contracts import AINarrativePayload
 from app.api.portfolio_analysis_contracts import AnalysisStatus
 from app.api.portfolio_analysis_contracts import PortfolioAdviceCard
 from app.api.portfolio_analysis_contracts import PortfolioResearchSource
@@ -40,24 +39,10 @@ MAX_PORTFOLIO_TOOL_PAYLOAD_CHARS = 80_000
 class AIProvider(Protocol):
     name: str
 
-    def generate(self, *, section: str, metrics: dict[str, Any]) -> AINarrativePayload: ...
-
 
 @dataclass(slots=True)
 class MockAIProvider:
     name: str = "mock"
-
-    def generate(self, *, section: str, metrics: dict[str, Any]) -> AINarrativePayload:
-        return AINarrativePayload(
-            provider=self.name,
-            model="mock",
-            status=AnalysisStatus.READY,
-            summary=f"{section} 摘要基于本地结构化指标生成，未调用外部模型。",
-            bullets=["结论来自当前持仓、行业集中度、行情与本地规则", "缺失的外部数据会保留为缺失，不使用猜测值填充"],
-            risks=["外部行情、新闻或情绪数据不可用时，分析置信度会下降"],
-            source_metrics=sorted(metrics.keys()),
-            confidence=0.65,
-        )
 
     def generate_portfolio_overlay(self, *, metrics: dict[str, Any]) -> dict[str, Any]:
         risk_rows = []
@@ -183,85 +168,6 @@ class OpenAIResponsesProvider:
         self.model = model
         self.timeout_seconds = timeout_seconds
 
-    def generate(self, *, section: str, metrics: dict[str, Any]) -> AINarrativePayload:
-        if not self.api_key:
-            return AINarrativePayload(
-                provider=self.name,
-                model=self.model,
-                status=AnalysisStatus.UNAVAILABLE,
-                confidence=0.0,
-                reason="openai_api_key_not_configured",
-            )
-        schema = {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "summary": {"type": "string"},
-                "bullets": {"type": "array", "items": {"type": "string"}},
-                "risks": {"type": "array", "items": {"type": "string"}},
-                "confidence": {"type": "number"},
-            },
-            "required": ["summary", "bullets", "risks", "confidence"],
-        }
-        prompt = (
-            "你是一个本地只读的持仓分析助手。只允许使用输入 JSON 中的结构化指标，禁止编造缺失数据、账户、新闻、订单或交易建议。"
-            "所有输出必须使用简体中文，必须围绕“当前组合”解释，事实和推断要分开，不要输出英文标题或英文段落。"
-            "返回一个 JSON 对象，字段为 summary、bullets、risks、confidence。"
-            "summary 用一句话给出结论；bullets 用 3 到 6 条覆盖：主要暴露、今日变化、最大风险、后续关注信号；risks 列出当前不确定性。"
-            f"\n分析分区：{section}\n结构化指标 JSON：\n{json.dumps(metrics, ensure_ascii=False, sort_keys=True)}"
-        )
-        try:
-            response = httpx.post(
-                "https://api.openai.com/v1/responses",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "input": prompt,
-                    "text": {
-                        "format": {
-                            "type": "json_schema",
-                            "name": "portfolio_narrative",
-                            "schema": schema,
-                            "strict": True,
-                        }
-                    },
-                },
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            text = payload.get("output_text") or _extract_output_text(payload)
-            parsed = json.loads(text or "{}")
-            return AINarrativePayload(
-                provider=self.name,
-                model=self.model,
-                status=AnalysisStatus.READY,
-                summary=str(parsed.get("summary") or ""),
-                bullets=_coerce_string_list(parsed.get("bullets")),
-                risks=_coerce_string_list(parsed.get("risks")),
-                source_metrics=sorted(metrics.keys()),
-                confidence=_coerce_confidence(parsed.get("confidence")),
-            )
-        except httpx.TimeoutException:
-            return AINarrativePayload(
-                provider=self.name,
-                model=self.model,
-                status=AnalysisStatus.ERROR,
-                confidence=0.0,
-                reason="openai_generation_timed_out",
-            )
-        except Exception as exc:
-            return AINarrativePayload(
-                provider=self.name,
-                model=self.model,
-                status=AnalysisStatus.ERROR,
-                confidence=0.0,
-                reason=f"openai_generation_failed: {exc}",
-            )
-
     def generate_stock_memo(self, *, metrics: dict[str, Any]) -> dict[str, Any]:
         if not self.api_key:
             return _stock_memo_unavailable(
@@ -333,108 +239,6 @@ class MiniMaxChatCompletionsProvider:
         self.last_model_used = model
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
-
-    def generate(self, *, section: str, metrics: dict[str, Any]) -> AINarrativePayload:
-        if not self.api_key:
-            return AINarrativePayload(
-                provider=self.name,
-                model=self.model,
-                status=AnalysisStatus.UNAVAILABLE,
-                confidence=0.0,
-                reason=f"{self.name}_api_key_not_configured",
-            )
-        system_prompt = (
-            "你是一个本地只读的持仓分析助手。只允许使用用户提供的结构化 JSON 指标。"
-            "禁止编造缺失数据、新闻、账户、订单或交易动作。"
-            "所有输出必须使用简体中文，必须围绕当前组合解释，事实和推断分开。"
-            "只返回一个合法 JSON 对象，字段为 summary、bullets、risks、confidence。"
-        )
-        user_prompt = (
-            f"分析分区：{section}\n"
-            "输出要求：summary 用一句话给出结论；bullets 用 3 到 6 条覆盖主要暴露、今日变化、最大风险、后续关注信号；"
-            "risks 列出当前不确定性。不要输出英文标题。\n"
-            f"结构化指标 JSON：\n{json.dumps(metrics, ensure_ascii=False, sort_keys=True)}"
-        )
-        try:
-            parsed = self._generate_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                prefer_response_format=False,
-            )
-        except ValueError:
-            try:
-                parsed = self._generate_json(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    prefer_response_format=True,
-                )
-            except ValueError as exc:
-                return AINarrativePayload(
-                    provider=self.name,
-                    model=self.model,
-                    status=AnalysisStatus.ERROR,
-                    confidence=0.0,
-                    reason=f"{self.name}_generation_empty_or_invalid_json: {exc}",
-                )
-            except httpx.TimeoutException:
-                return AINarrativePayload(
-                    provider=self.name,
-                    model=self.model,
-                    status=AnalysisStatus.ERROR,
-                    confidence=0.0,
-                    reason=f"{self.name}_generation_timed_out",
-                )
-            except Exception as exc:
-                return AINarrativePayload(
-                    provider=self.name,
-                    model=self.model,
-                    status=AnalysisStatus.ERROR,
-                    confidence=0.0,
-                    reason=f"{self.name}_generation_failed: {exc}",
-                )
-        except httpx.TimeoutException:
-            return AINarrativePayload(
-                provider=self.name,
-                model=self.model,
-                status=AnalysisStatus.ERROR,
-                confidence=0.0,
-                reason=f"{self.name}_generation_timed_out",
-            )
-        except Exception as exc:
-            return AINarrativePayload(
-                provider=self.name,
-                model=self.model,
-                status=AnalysisStatus.ERROR,
-                confidence=0.0,
-                reason=f"{self.name}_generation_failed: {exc}",
-            )
-        try:
-            return AINarrativePayload(
-                provider=self.name,
-                model=self.model,
-                status=AnalysisStatus.READY,
-                summary=str(parsed.get("summary") or ""),
-                bullets=_coerce_string_list(parsed.get("bullets")),
-                risks=_coerce_string_list(parsed.get("risks")),
-                source_metrics=sorted(metrics.keys()),
-                confidence=_coerce_confidence(parsed.get("confidence")),
-            )
-        except httpx.TimeoutException:
-            return AINarrativePayload(
-                provider=self.name,
-                model=self.model,
-                status=AnalysisStatus.ERROR,
-                confidence=0.0,
-                reason=f"{self.name}_generation_timed_out",
-            )
-        except Exception as exc:
-            return AINarrativePayload(
-                provider=self.name,
-                model=self.model,
-                status=AnalysisStatus.ERROR,
-                confidence=0.0,
-                reason=f"{self.name}_generation_failed: {exc}",
-            )
 
     def _post_chat_completion(self, endpoint_url: str, payload: dict[str, Any]) -> httpx.Response:
         response = httpx.post(
@@ -1368,49 +1172,13 @@ def _deepseek_http_error_reason(exc: httpx.HTTPStatusError) -> str:
 
 
 class AINarrativeService:
-    _shared_daily_cache: dict[tuple[str, str, str], AINarrativePayload] = {}
-    _shared_refresh_state: dict[tuple[str, str, str], AINarrativePayload] = {}
     _shared_structured_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
     _shared_structured_state: dict[tuple[str, str, str], dict[str, Any]] = {}
     _lock = Lock()
 
     def __init__(self) -> None:
-        self._daily_cache = self._shared_daily_cache
-        self._refresh_state = self._shared_refresh_state
         self._structured_cache = self._shared_structured_cache
         self._structured_state = self._shared_structured_state
-
-    def generate(
-        self,
-        *,
-        provider: AIProvider,
-        section: str,
-        metrics: dict[str, Any],
-        cache_key: str = "default",
-        force: bool = False,
-    ) -> AINarrativePayload:
-        key = self._key(provider=provider, section=section, cache_key=cache_key)
-        with self._lock:
-            cached = self._daily_cache.get(key)
-        if cached is not None and not force:
-            return cached
-        compact_metrics = _compact_metrics_for_ai(metrics)
-        if force:
-            self.mark_refresh_started(provider=provider, section=section, cache_key=cache_key)
-        narrative = provider.generate(section=section, metrics=compact_metrics)
-        if narrative.status == AnalysisStatus.READY:
-            narrative.as_of = narrative.as_of or _now_iso()
-            with self._lock:
-                self._daily_cache[key] = narrative
-                self._refresh_state[key] = narrative
-        elif force:
-            fallback = _fallback_narrative(provider=provider, section=section, metrics=compact_metrics, reason=narrative.reason)
-            with self._lock:
-                self._refresh_state[key] = fallback
-            return fallback
-        elif narrative.status == AnalysisStatus.ERROR:
-            return _fallback_narrative(provider=provider, section=section, metrics=compact_metrics, reason=narrative.reason)
-        return narrative
 
     def generate_portfolio_overlay(
         self,
@@ -1659,106 +1427,8 @@ class AINarrativeService:
                 reason="stock_memo_refresh_in_progress",
             )
 
-    def mark_refresh_started(
-        self,
-        *,
-        provider: AIProvider,
-        section: str,
-        cache_key: str = "default",
-    ) -> None:
-        key = self._key(provider=provider, section=section, cache_key=cache_key)
-        with self._lock:
-            self._refresh_state[key] = AINarrativePayload(
-                provider=provider.name,
-                model=_provider_model(provider),
-                status=AnalysisStatus.PENDING,
-                confidence=0.0,
-                as_of=_now_iso(),
-                reason="ai_narrative_refresh_in_progress",
-            )
-
-    def cached_or_pending(
-        self,
-        *,
-        provider: AIProvider,
-        section: str,
-        cache_key: str = "default",
-    ) -> AINarrativePayload:
-        key = self._key(provider=provider, section=section, cache_key=cache_key)
-        with self._lock:
-            refresh_state = self._refresh_state.get(key)
-            cached = self._daily_cache.get(key)
-        if refresh_state is not None and refresh_state.status == AnalysisStatus.PENDING:
-            return refresh_state
-        if cached is not None:
-            return cached
-        if refresh_state is not None:
-            return refresh_state
-        return AINarrativePayload(
-            provider=provider.name,
-            model=_provider_model(provider),
-            status=AnalysisStatus.PENDING,
-            confidence=0.0,
-            reason="ai_narrative_waiting_for_manual_refresh",
-        )
-
     def _key(self, *, provider: AIProvider, section: str, cache_key: str) -> tuple[str, str, str]:
         return (date.today().isoformat(), provider.name, f"{section}:{cache_key}")
-
-
-def _safe_refresh_error(*, provider: AIProvider, narrative: AINarrativePayload) -> AINarrativePayload:
-    reason = narrative.reason or f"{provider.name}_generation_failed"
-    if "timed_out" in reason or "timed out" in reason or "read operation timed out" in reason:
-        reason = f"{provider.name}_generation_timed_out_retry_later"
-    return AINarrativePayload(
-        provider=provider.name,
-        model=narrative.model or _provider_model(provider),
-        status=AnalysisStatus.ERROR,
-        confidence=0.0,
-        as_of=_now_iso(),
-        reason=reason,
-    )
-
-
-def _fallback_narrative(*, provider: AIProvider, section: str, metrics: dict[str, Any], reason: str | None) -> AINarrativePayload:
-    metric_names = sorted(metrics.keys())
-    return AINarrativePayload(
-        provider="local_rules",
-        model=None,
-        status=AnalysisStatus.READY,
-        summary="外部模型暂不可用，本摘要改用本地结构化指标生成；市场与持仓数据不受影响。",
-        bullets=_fallback_bullets(section=section, metrics=metrics),
-        risks=[
-            f"外部模型 {provider.name} 生成失败，原因：{reason or 'unknown'}",
-            "本地摘要只解释已有结构化数据，不补写新闻、公告或未接入情绪源。",
-        ],
-        source_metrics=metric_names,
-        confidence=0.45,
-        as_of=_now_iso(),
-        reason=f"{provider.name}_fallback_to_local_rules",
-    )
-
-
-def _fallback_bullets(*, section: str, metrics: dict[str, Any]) -> list[str]:
-    if section == "market":
-        regime = metrics.get("market_regime", {})
-        value = regime.get("value") if isinstance(regime, dict) else None
-        return [
-            f"当前市场状态：{value or '待判断'}。",
-            "市场情绪优先使用外部指标，缺失时回退到本地规则代理。",
-            "重点看市场状态如何传导到高权重持仓，而不是孤立看指数涨跌。",
-        ]
-    if section == "portfolio":
-        return [
-            "组合风险由集中度、主题暴露、相关性、尾部风险和宏观敏感性共同判断。",
-            "高权重持仓与同主题持仓会放大组合波动。",
-            "防御建议只提供风险方向，不包含交易执行。",
-        ]
-    return [
-        "个股分析基于当前持仓、价格趋势、组合权重和本地风险规则。",
-        "方向判断是短期信号，不代表基本面结论。",
-        "需要继续跟踪价格、财报、公告和同主题持仓联动。",
-    ]
 
 
 def _portfolio_overlay_unavailable(*, provider: AIProvider, reason: str) -> dict[str, Any]:
@@ -2545,14 +2215,6 @@ def _parse_json_object(text: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("AI response is not a JSON object")
     return parsed
-
-
-def _coerce_string_list(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [str(item) for item in value if item not in (None, "")]
-    if value in (None, ""):
-        return []
-    return [str(value)]
 
 
 def _coerce_confidence(value: Any) -> float:

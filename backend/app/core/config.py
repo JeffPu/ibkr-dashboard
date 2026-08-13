@@ -5,7 +5,6 @@ import json
 
 @dataclass(slots=True)
 class Settings:
-    app_name: str = "ibkr-dashboard-backend"
     es_backend: str = "http"
     es_base_url: str = "http://localhost:9200"
     es_timeout_seconds: float = 5.0
@@ -39,7 +38,6 @@ def load_settings() -> Settings:
         es_backend = os.getenv("ES_BACKEND", "http").strip().lower()
         es_base_url = os.getenv("ES_BASE_URL", "http://localhost:9200")
     return Settings(
-        app_name=os.getenv("APP_NAME", "ibkr-dashboard-backend"),
         es_backend=es_backend,
         es_base_url=es_base_url,
         es_timeout_seconds=timeout,

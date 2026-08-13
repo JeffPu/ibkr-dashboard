@@ -3,7 +3,8 @@ FROM python:3.12-slim AS base
 WORKDIR /app
 
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir "." "uvicorn[standard]"
+ARG BACKEND_EXTRAS=""
+RUN pip install --no-cache-dir ".${BACKEND_EXTRAS}" uvicorn
 
 COPY . .
 

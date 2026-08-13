@@ -219,10 +219,6 @@ export function sortRecords(records: ApiRecord[], key: string, direction: "asc" 
   });
 }
 
-export function getCurrency(record: ApiRecord, fallback = "USD"): string {
-  return asText(record.display_currency ?? record.currency ?? record.notional_currency, fallback);
-}
-
 function normalizeCurrencyCode(currency: string): string {
   const code = (currency || "USD").toUpperCase();
   if (code === "RMB") return "CNY";

@@ -27,7 +27,7 @@ class ManualBackfillTask:
 class ManualBackfillService:
     def __init__(self, *, max_task_logs: int = 100) -> None:
         self.tasks: dict[str, ManualBackfillTask] = {}
-        self.max_task_logs = max_task_logs
+        self.max_task_logs = min(max(max_task_logs, 1), 100)
         self._created_counter = 0
 
     def enqueue(self, *, start_date: date, end_date: date) -> str:
@@ -95,93 +95,17 @@ class ManualBackfillService:
         *,
         page: int = 1,
         page_size: int = 20,
-        status: str | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        sort_by: str = "created_at",
-        sort_order: str = "desc",
     ) -> list[ManualBackfillTask]:
         normalized_page = max(page, 1)
-        normalized_page_size = max(page_size, 1)
-        ordered = self._filtered_tasks(
-            status=status,
-            start_date=start_date,
-            end_date=end_date,
-            sort_by=sort_by,
-            sort_order=sort_order,
+        normalized_page_size = min(max(page_size, 1), 100)
+        ordered = sorted(
+            self.tasks.values(),
+            key=lambda task: task.created_order,
+            reverse=True,
         )
         start = (normalized_page - 1) * normalized_page_size
         end = start + normalized_page_size
         return ordered[start:end]
-
-    def count_by_status(self) -> dict[str, int]:
-        counts = {"pending": 0, "running": 0, "completed": 0, "failed": 0}
-        for task in self.tasks.values():
-            if task.status in counts:
-                counts[task.status] += 1
-        return counts
-
-    def list_tasks_with_cursor(
-        self,
-        *,
-        cursor: str | None = None,
-        limit: int = 20,
-        status: str | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        sort_by: str = "created_at",
-        sort_order: str = "desc",
-    ) -> tuple[list[ManualBackfillTask], str | None]:
-        ordered = self._filtered_tasks(
-            status=status,
-            start_date=start_date,
-            end_date=end_date,
-            sort_by=sort_by,
-            sort_order=sort_order,
-        )
-        normalized_limit = max(limit, 1)
-        start = 0
-        if cursor:
-            cursor_found = False
-            for idx, task in enumerate(ordered):
-                if task.task_id == cursor:
-                    start = idx + 1
-                    cursor_found = True
-                    break
-            if not cursor_found:
-                raise ValueError("invalid_cursor")
-        items = ordered[start : start + normalized_limit]
-        has_more = start + normalized_limit < len(ordered)
-        next_cursor = items[-1].task_id if items and has_more else None
-        return items, next_cursor
-
-    def _filtered_tasks(
-        self,
-        *,
-        status: str | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        sort_by: str = "created_at",
-        sort_order: str = "desc",
-    ) -> list[ManualBackfillTask]:
-        ordered = list(self.tasks.values())
-        if status:
-            ordered = [task for task in ordered if task.status == status]
-        if start_date:
-            ordered = [task for task in ordered if task.end_date >= start_date]
-        if end_date:
-            ordered = [task for task in ordered if task.start_date <= end_date]
-        key_map = {
-            "created_at": lambda task: getattr(task, "created_order", 0),
-            "start_date": lambda task: task.start_date,
-            "end_date": lambda task: task.end_date,
-            "status": lambda task: task.status,
-            "progress": lambda task: task.progress,
-        }
-        key_fn = key_map.get(sort_by, key_map["created_at"])
-        reverse = sort_order != "asc"
-        ordered.sort(key=key_fn, reverse=reverse)
-        return ordered
 
     def _build_date_range(self, start_date: date, end_date: date) -> list[str]:
         dates: list[str] = []

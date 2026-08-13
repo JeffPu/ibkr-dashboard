@@ -6,6 +6,7 @@ import re
 from fastapi import APIRouter
 from fastapi import HTTPException
 from pydantic import BaseModel
+from pydantic import ConfigDict
 
 from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
 from app.services.flex_client import FlexStatementClient
@@ -31,6 +32,8 @@ TELEGRAM_CHAT_ID_PATTERN = re.compile(r"^-?\d{5,20}$")
 
 
 class SettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     base_currency: str | None = None
     timezone: str | None = None
     finnhub_api_key: str | None = None
@@ -45,9 +48,6 @@ class SettingsUpdateRequest(BaseModel):
     telegram_allowlisted_chat_ids: list[str | int] | None = None
     telegram_reports_enabled: bool | None = None
     telegram_daily_report_time: str | None = None
-    mcp_server_enabled: bool | None = None
-    report_cache_enabled: bool | None = None
-    report_cache_ttl_minutes: int | None = None
 
 
 class RevealApiKeyRequest(BaseModel):
@@ -135,8 +135,6 @@ def update_settings(payload: SettingsUpdateRequest) -> dict[str, object]:
         and not TIME_OF_DAY_PATTERN.fullmatch(payload.telegram_daily_report_time)
     ):
         raise HTTPException(status_code=400, detail="telegram_daily_report_time must use HH:MM")
-    if payload.report_cache_ttl_minutes is not None and payload.report_cache_ttl_minutes <= 0:
-        raise HTTPException(status_code=400, detail="report_cache_ttl_minutes must be greater than 0")
     telegram_allowlisted_chat_ids = None
     if payload.telegram_allowlisted_chat_ids is not None:
         telegram_allowlisted_chat_ids = _normalize_telegram_chat_ids(payload.telegram_allowlisted_chat_ids)
@@ -155,9 +153,6 @@ def update_settings(payload: SettingsUpdateRequest) -> dict[str, object]:
         telegram_allowlisted_chat_ids=telegram_allowlisted_chat_ids,
         telegram_reports_enabled=payload.telegram_reports_enabled,
         telegram_daily_report_time=payload.telegram_daily_report_time,
-        mcp_server_enabled=payload.mcp_server_enabled,
-        report_cache_enabled=payload.report_cache_enabled,
-        report_cache_ttl_minutes=payload.report_cache_ttl_minutes,
     )
     if (
         payload.pull_frequency_minutes is not None
@@ -406,9 +401,6 @@ def _settings_response() -> dict[str, object]:
         "telegram_allowlisted_chat_ids": list(settings.telegram_allowlisted_chat_ids),
         "telegram_reports_enabled": settings.telegram_reports_enabled,
         "telegram_daily_report_time": settings.telegram_daily_report_time,
-        "mcp_server_enabled": settings.mcp_server_enabled,
-        "report_cache_enabled": settings.report_cache_enabled,
-        "report_cache_ttl_minutes": settings.report_cache_ttl_minutes,
         "last_successful_sync_at": settings.last_successful_sync_at,
         "last_successful_sync_date": settings.last_successful_sync_date,
 }

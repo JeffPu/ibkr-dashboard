@@ -97,24 +97,6 @@ const paths: Record<string, ReactNode> = {
       <path {...common} d="m15.5 8.5-2.2 4.8-4.8 2.2 2.2-4.8 4.8-2.2Z" />
     </>
   ),
-  search: (
-    <>
-      <circle {...common} cx="10.5" cy="10.5" r="6.5" />
-      <path {...common} d="m16 16 4 4" />
-    </>
-  ),
-  calendar: (
-    <>
-      <rect {...common} x="4" y="5" width="16" height="15" rx="2" />
-      <path {...common} d="M8 3v4M16 3v4M4 10h16" />
-    </>
-  ),
-  check: (
-    <>
-      <circle {...common} cx="12" cy="12" r="9" />
-      <path {...common} d="m8 12 2.5 2.5L16 9" />
-    </>
-  ),
 };
 
 export function Icon({

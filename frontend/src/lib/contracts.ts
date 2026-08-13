@@ -99,8 +99,6 @@ export type AnalysisStatus =
   | "unavailable"
   | "error";
 
-export type PortfolioAnalysisSectionKey = "market" | "portfolio" | "stock";
-
 export interface StandardMetric {
   value: string | number | boolean | null;
   unit: string | null;
@@ -109,41 +107,6 @@ export interface StandardMetric {
   confidence: number | null;
   status: AnalysisStatus;
   reason: string | null;
-}
-
-export interface EChartsSeries {
-  name: string;
-  points: Array<Record<string, string | number | null>>;
-}
-
-export interface EChartsPayload {
-  chart_type: string;
-  title: string;
-  unit: string | null;
-  status: AnalysisStatus;
-  source: string;
-  as_of: string | null;
-  series: EChartsSeries[];
-  options: ApiRecord;
-}
-
-export interface TelegramStatusPayload {
-  enabled: boolean;
-  status: AnalysisStatus;
-  allowlisted_chat_ids_count: number;
-  schedule: string | null;
-  last_delivery_at: string | null;
-  source: string;
-  as_of: string | null;
-  reason: string | null;
-}
-
-export interface MCPToolPayload {
-  tool: string;
-  status: AnalysisStatus;
-  data: ApiRecord;
-  generated_at: string | null;
-  warnings: string[];
 }
 
 export interface MarketAnalysisSection {
@@ -158,125 +121,6 @@ export interface MarketAnalysisSection {
   opportunities: string[];
   reasons: string[];
   risks: string[];
-  charts: EChartsPayload[];
-}
-
-export interface PortfolioRiskRow {
-  position_key: string;
-  symbol: string;
-  current_price: number | null;
-  weight_pct: number;
-  unrealized_pnl: number | null;
-  logic_status: string;
-  recommendation: string;
-  risk_points: Array<{
-    severity: "high" | "medium" | "low";
-    title: string;
-    detail: string;
-    evidence_ids: string[];
-  }>;
-  tracking_points: Array<{
-    item: string;
-    why: string;
-    trigger: string;
-    horizon: "7d" | "30d" | "quarterly";
-    evidence_ids: string[];
-  }>;
-  sources: Array<{
-    id: string;
-    title: string;
-    url: string;
-    published_at: string | null;
-    source_type: "filing" | "company_ir" | "exchange" | "financial_media" | "other";
-  }>;
-  research_status: "ready" | "missing";
-  status: AnalysisStatus;
-  confidence: number | null;
-  source: string;
-  as_of: string | null;
-  reason: string | null;
-}
-
-export interface PortfolioRebalanceAdvice {
-  cards: Array<{
-    rank: "01" | "02" | "03" | "04";
-    icon: "alert" | "search" | "compass" | "calendar" | "check";
-    title: string;
-    body: string;
-  }>;
-  action_today: string | null;
-  thinking_prompt: string | null;
-  status: AnalysisStatus;
-  source: string;
-  as_of: string | null;
-  confidence: number | null;
-  reason: string | null;
-}
-
-export interface PortfolioRiskSection {
-  status: AnalysisStatus;
-  concentration: Record<string, StandardMetric>;
-  factor_exposure: Record<string, StandardMetric>;
-  correlation: Record<string, StandardMetric>;
-  tail_risk: Record<string, StandardMetric>;
-  macro_sensitivity: Record<string, StandardMetric>;
-  alerts: ApiRecord[];
-  hedge_suggestions: string[];
-  greeks: Record<string, StandardMetric>;
-  expiration_risk: Record<string, StandardMetric>;
-  advisor_facts: StandardMetric[];
-  risk_rows: PortfolioRiskRow[];
-  rebalance_advice: PortfolioRebalanceAdvice;
-  analysis_meta: ApiRecord;
-  charts: EChartsPayload[];
-}
-
-export interface StockSelectionOption {
-  symbol: string;
-  label: string;
-  weight_pct: number;
-  market_value: number | null;
-  quantity: number | null;
-  source: string;
-}
-
-export interface StockResearchMemo {
-  status: AnalysisStatus;
-  symbol: string | null;
-  one_line_view: string | null;
-  position_role: string | null;
-  logic_status: string | null;
-  ai_relevance: string | null;
-  holding_thesis: string[];
-  facts: string[];
-  inferences: string[];
-  portfolio_impact: string[];
-  key_risks: string[];
-  tracking_questions: string[];
-  invalidation_signals: string[];
-  read_only_suggestion: string | null;
-  source: string;
-  as_of: string | null;
-  confidence: number | null;
-  reason: string | null;
-}
-
-export interface StockAnalysisSection {
-  status: AnalysisStatus;
-  symbol: string | null;
-  available_symbols: StockSelectionOption[];
-  memo: StockResearchMemo;
-  profile: Record<string, StandardMetric>;
-  indicators: Record<string, StandardMetric>;
-  direction: string | null;
-  core_changes: string[];
-  portfolio_impact: string[];
-  beneficiaries: string[];
-  market_mispricing: string[];
-  watch_signals: string[];
-  evidence_links: Array<{ label: string; url: string }>;
-  risks: string[];
-  charts: EChartsPayload[];
 }
 
 export interface PortfolioAnalysisResponse {
@@ -474,9 +318,6 @@ export interface SettingsResponse {
   telegram_allowlisted_chat_ids: string[];
   telegram_reports_enabled: boolean;
   telegram_daily_report_time: string;
-  mcp_server_enabled: boolean;
-  report_cache_enabled: boolean;
-  report_cache_ttl_minutes: number;
   last_successful_sync_at: string | null;
   last_successful_sync_date: string | null;
   last_successful_sync_at_local?: string | null;

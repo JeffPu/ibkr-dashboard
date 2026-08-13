@@ -25,9 +25,6 @@ interface SettingsForm {
   telegram_allowlisted_chat_ids: string;
   telegram_reports_enabled: boolean;
   telegram_daily_report_time: string;
-  mcp_server_enabled: boolean;
-  report_cache_enabled: boolean;
-  report_cache_ttl_minutes: number;
 }
 
 const defaultForm: SettingsForm = {
@@ -45,9 +42,6 @@ const defaultForm: SettingsForm = {
   telegram_allowlisted_chat_ids: "",
   telegram_reports_enabled: false,
   telegram_daily_report_time: "08:30",
-  mcp_server_enabled: false,
-  report_cache_enabled: true,
-  report_cache_ttl_minutes: 60,
 };
 
 const currencyOptions = [
@@ -97,9 +91,6 @@ function settingsToForm(data: SettingsResponse): SettingsForm {
     telegram_allowlisted_chat_ids: data.telegram_allowlisted_chat_ids.join("\n"),
     telegram_reports_enabled: Boolean(data.telegram_reports_enabled),
     telegram_daily_report_time: asText(data.telegram_daily_report_time, "08:30"),
-    mcp_server_enabled: Boolean(data.mcp_server_enabled),
-    report_cache_enabled: Boolean(data.report_cache_enabled),
-    report_cache_ttl_minutes: asNumber(data.report_cache_ttl_minutes, 60),
   };
 }
 
@@ -132,9 +123,6 @@ export function SettingsPage() {
         telegram_allowlisted_chat_ids: parseTelegramChatIds(form.telegram_allowlisted_chat_ids),
         telegram_reports_enabled: form.telegram_reports_enabled,
         telegram_daily_report_time: form.telegram_daily_report_time,
-        mcp_server_enabled: form.mcp_server_enabled,
-        report_cache_enabled: form.report_cache_enabled,
-        report_cache_ttl_minutes: form.report_cache_ttl_minutes,
       };
       if (hasMaskedValue(form.finnhub_api_key)) delete payload.finnhub_api_key;
       if (hasMaskedValue(form.flex_token)) delete payload.flex_token;
@@ -179,7 +167,7 @@ export function SettingsPage() {
     <DataState loading={state.loading} error={state.error} data={state.data} onRetry={load}>
       {(data) => (
         <>
-          <div className="page-header__meta">
+          <div className="settings-page-actions">
             <StatusPill tone={data.flex_query_id ? "positive" : "neutral"}>{data.flex_query_id ? "Flex 已配置" : "待配置 Flex"}</StatusPill>
             <StatusPill>同步 {formatDateTimeMinute(data.last_successful_sync_at_local ?? data.last_successful_sync_at)}</StatusPill>
             <button type="button" onClick={save}>保存全部</button>
@@ -211,14 +199,6 @@ export function SettingsPage() {
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
-                  </Field>
-                  <Field label="缓存有效期">
-                    <input
-                      type="number"
-                      min={1}
-                      value={form.report_cache_ttl_minutes}
-                      onChange={(event) => setForm({ ...form, report_cache_ttl_minutes: Number(event.target.value) })}
-                    />
                   </Field>
                 </div>
               </Surface>
@@ -320,26 +300,14 @@ export function SettingsPage() {
                       rows={3}
                     />
                   </Field>
-                  <div className="settings-integration-switches" aria-label="集成功能开关">
-                    <label className="switch-field">
-                      <input
-                        type="checkbox"
-                        checked={form.telegram_reports_enabled}
-                        onChange={(event) => setForm({ ...form, telegram_reports_enabled: event.target.checked })}
-                      />
-                      <span className="switch-control" />
-                      <span><strong>Telegram 日报</strong></span>
-                    </label>
-                    <label className="switch-field">
-                      <input
-                        type="checkbox"
-                        checked={form.mcp_server_enabled}
-                        onChange={(event) => setForm({ ...form, mcp_server_enabled: event.target.checked })}
-                      />
-                      <span className="switch-control" />
-                      <span><strong>MCP Server</strong></span>
-                    </label>
-                  </div>
+                  <label className="settings-checkbox-field">
+                    <input
+                      type="checkbox"
+                      checked={form.telegram_reports_enabled}
+                      onChange={(event) => setForm({ ...form, telegram_reports_enabled: event.target.checked })}
+                    />
+                    <strong>Telegram 日报</strong>
+                  </label>
                 </div>
               </Surface>
 
@@ -421,7 +389,7 @@ function IntegrationGuideModal({ onClose }: { onClose: () => void }) {
               <strong>MCP 接入前检查</strong>
               <ol>
                 <li>先启动本地 Elasticsearch 与仪表盘服务，并完成至少一次 XML 导入。</li>
-                <li>可在本页打开 MCP Server 并保存，以记录本地接入已启用；MCP 客户端仍会按自身配置启动一个 stdio 进程。</li>
+                <li>在 MCP 客户端中配置本地 stdio 进程；该进程由客户端按自身配置启动。</li>
                 <li>配置中的 command 与 cwd 必须替换为当前项目的绝对路径。MCP 进程直接读取本地 Elasticsearch，不通过浏览器的 5176 或 API 的 8085 端口。</li>
                 <li>保存客户端配置后，重启该客户端或重新连接 MCP。可先运行 --list-tools 验证进程能列出工具。</li>
               </ol>

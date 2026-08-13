@@ -50,40 +50,6 @@ class RawRepository:
             term_filters=filters or None,
         )
 
-    def list_trades(
-        self,
-        *,
-        symbol: str | None = None,
-        side: str | None = None,
-        page: int = 1,
-        page_size: int = 20,
-    ) -> list[dict[str, Any]]:
-        filters: dict[str, str] = {}
-        if symbol:
-            filters["symbol"] = symbol
-        if side:
-            filters["side"] = side
-        return self.es.search(
-            index="ibkr_trade_records_v1",
-            offset=max(page - 1, 0) * page_size,
-            size=page_size,
-            term_filters=filters or None,
-        )
-
-    def list_cash_flows(
-        self,
-        *,
-        page: int = 1,
-        page_size: int = 20,
-    ) -> list[dict[str, Any]]:
-        return self.es.search(
-            index="ibkr_stmt_funds_lines_v1",
-            offset=max(page - 1, 0) * page_size,
-            size=page_size,
-            sort_field="report_date",
-            descending=True,
-        )
-
     def upsert_parsed_data(self, parsed: ParsedXmlData) -> None:
         for record in parsed.account_snapshots:
             self._upsert_record("ibkr_account_snapshots_v1", record.document_id, record)

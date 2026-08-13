@@ -1,34 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
 import { api } from "../../lib/api";
-import type { ApiRecord, MarketAnalysisSection, PageState, PortfolioAnalysisResponse, StandardMetric } from "../../lib/contracts";
+import type { ApiRecord, MarketAnalysisSection, PortfolioAnalysisResponse, StandardMetric } from "../../lib/contracts";
 import { formatNumber, recordArray, recordBool, recordNumber, recordObject, recordText } from "../../lib/format";
+import { useApiData } from "../../lib/useApiData";
 import { Icon } from "../../components/Icon";
 import { DataState, MetricCard, StatusPill } from "../../components/Primitives";
 
 export function PortfolioAnalysisPage() {
-  const [state, setState] = useState<PageState<PortfolioAnalysisResponse>>({ data: null, loading: true, error: null });
-
-  const load = useCallback(async () => {
-    setState((previous) => ({ ...previous, loading: true, error: null }));
-    try {
-      const data = await api.portfolioAnalysis();
-      setState({ data, loading: false, error: null });
-    } catch (error) {
-      setState((previous) => ({
-        ...previous,
-        loading: false,
-        error: error instanceof Error ? error.message : "unknown error",
-      }));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { state, load } = useApiData<PortfolioAnalysisResponse>(() => api.portfolioAnalysis());
 
   return (
     <div className="portfolio-analysis-page">
-      <DataState loading={state.loading} error={state.error} data={state.data} onRetry={() => void load()}>
+      <DataState loading={state.loading} error={state.error} data={state.data} onRetry={load}>
         {(data) => <MarketPanel data={data} />}
       </DataState>
     </div>

@@ -325,7 +325,7 @@ function TradeCountChart({ rows, currency, mode }: { rows: TradeCountRow[]; curr
 
   return (
     <div className="monthly-trade-chart">
-      <EChart option={option} height={220} />
+      <EChart option={option} height={220} ariaLabel="月度交易笔数柱状图" />
       <div className="trade-stat-summary">
         <div className="trade-stat-card">
           <span>总交易笔数</span>

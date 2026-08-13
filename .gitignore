@@ -11,11 +11,9 @@
 *.iml
 
 # OS files
-.DS_Store
 **/.DS_Store
 
 # Local screenshots or temporary visual notes
-/img.png
 /screenshots/
 
 # Keep repository uploads focused on code and README only.
@@ -36,7 +34,6 @@
 *.svg
 
 # Python caches and local environments
-__pycache__/
 **/__pycache__/
 *.pyc
 .pytest_cache/
@@ -47,14 +44,12 @@ backend/.venv/
 
 # Frontend dependencies and build output
 node_modules/
-frontend/node_modules/
 frontend/dist/
 
 # Local secrets and credentials
 .env
 .env.*
 !.env.example
-!backend/.env.example
 
 # User portfolio data and local databases
 *.xml
@@ -69,13 +64,10 @@ ibkr-dashboard-imports/
 *.log
 coverage/
 htmlcov/
-backend/htmlcov/
 .coverage
-backend/.coverage
 
 # Internal planning/review documents, not needed for normal startup or use
 docs/
-PRD.md
 
 # Keep the full local suite out of release artifacts, but version the regression
 # files that define the portfolio-AI/settings contracts changed by this project.

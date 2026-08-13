@@ -1,18 +1,13 @@
-import { Component, Suspense, lazy, useState } from "react";
+import { Component, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import type { NavItem, PageKey } from "./lib/contracts";
 import { Icon } from "./components/Icon";
 import { OverviewPage } from "./features/overview/OverviewPage";
 import { PositionsPage } from "./features/positions/PositionsPage";
 import { PerformancePage } from "./features/performance/PerformancePage";
+import { PortfolioAnalysisPage } from "./features/portfolio-analysis/PortfolioAnalysisPage";
 import { TradesPage } from "./features/trades/TradesPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
-
-const PortfolioAnalysisPage = lazy(() =>
-  import("./features/portfolio-analysis/PortfolioAnalysisPage").then((module) => ({
-    default: module.PortfolioAnalysisPage,
-  }))
-);
 
 const NAV_ITEMS: NavItem[] = [
   { key: "overview", label: "资产总览", detail: "净值 / 曲线 / 状态", icon: "overview" },
@@ -30,11 +25,7 @@ const PAGE_RENDERERS: Record<PageKey, (navigate: (page: PageKey, options?: Navig
   positions: (_navigate, options) => <PositionsPage initialExpiryFilter={options?.expiryStatus} />,
   performance: () => <PerformancePage />,
   trades: () => <TradesPage />,
-  portfolioAnalysis: () => (
-    <Suspense fallback={<div className="loading-block"><span /><strong>正在加载市场分析</strong></div>}>
-      <PortfolioAnalysisPage />
-    </Suspense>
-  ),
+  portfolioAnalysis: () => <PortfolioAnalysisPage />,
   settings: () => <SettingsPage />,
 };
 

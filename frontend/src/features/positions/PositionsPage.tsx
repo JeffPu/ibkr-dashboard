@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, WheelEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { EChartsOption } from "echarts";
 import { api } from "../../lib/api";
 import type { ApiRecord, PositionsResponse } from "../../lib/contracts";
 import {
@@ -7,7 +7,6 @@ import {
   asNumber,
   asRecord,
   asText,
-  clamp,
   deltaClass,
   formatCurrency,
   formatDate,
@@ -27,6 +26,7 @@ import {
   Surface,
   Toolbar,
 } from "../../components/Primitives";
+import { EChart } from "../../components/charts/EChart";
 import { useApiData } from "../../lib/useApiData";
 
 interface PositionData {
@@ -514,15 +514,7 @@ async function copyContractCode(code: string): Promise<boolean> {
     await navigator.clipboard.writeText(code);
     return true;
   } catch {
-    const input = document.createElement("textarea");
-    input.value = code;
-    input.style.position = "fixed";
-    input.style.opacity = "0";
-    document.body.appendChild(input);
-    input.select();
-    const copied = document.execCommand("copy");
-    input.remove();
-    return copied;
+    return false;
   }
 }
 
@@ -535,105 +527,57 @@ function PieChart({
   emptyTitle: string;
   emptyDetail: string;
 }) {
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const visible = rows.filter((row) => row.value > 0);
   const total = visible.reduce((sum, row) => sum + row.value, 0);
   if (visible.length === 0 || total <= 0) {
     return <EmptyState compact title={emptyTitle} detail={emptyDetail} />;
   }
-  const radius = 118;
-  const center = 130;
-  const active = visible[activeIndex] ?? visible[0];
-  let cursor = -90;
-  const slices = visible.map((row, index) => {
-    const percent = row.value / total;
-    const angle = Math.max(0, percent * 360);
-    const slice = describePieSlice(center, center, radius, cursor, cursor + angle);
-    cursor += angle;
-    return { ...row, percent, color: PIE_COLORS[index % PIE_COLORS.length], path: slice, index };
-  });
-  const showTooltip = (index: number, event: MouseEvent<SVGPathElement>) => {
-    const bounds = event.currentTarget.ownerSVGElement?.getBoundingClientRect();
-    if (!bounds) {
-      return;
-    }
-    setActiveIndex(index);
-    setTooltip({
-      x: event.clientX - bounds.left,
-      y: event.clientY - bounds.top,
-      width: bounds.width,
-      height: bounds.height,
-    });
+  const option: EChartsOption = {
+    animationDuration: 240,
+    aria: { enabled: true, decal: { show: true } },
+    color: PIE_COLORS,
+    tooltip: {
+      trigger: "item",
+      renderMode: "richText",
+      formatter: (params) => {
+        const item = params as { name?: string; value?: unknown; percent?: unknown };
+        return `${item.name ?? "-"}\n占比 ${formatNumber(item.percent, 2)}%\n金额 ${formatNumber(item.value, 2)}`;
+      },
+    },
+    legend: {
+      type: "scroll",
+      orient: "vertical",
+      right: 2,
+      top: "middle",
+      width: "34%",
+      textStyle: { color: "#20231f", fontSize: 12, fontWeight: 700 },
+      formatter: (name: string) => {
+        const row = visible.find((item) => item.label === name);
+        return `${name}  ${formatPercent((row?.value ?? 0) / total)}`;
+      },
+    },
+    series: [{
+      name: "占比",
+      type: "pie",
+      radius: ["12%", "72%"],
+      center: ["31%", "50%"],
+      minAngle: 1,
+      avoidLabelOverlap: true,
+      label: { show: false },
+      emphasis: { scaleSize: 7, label: { show: true, formatter: "{b}\n{d}%", fontWeight: 800 } },
+      data: visible.map((row) => ({ name: row.label, value: row.value })),
+    }],
   };
-  const tooltipX = tooltip ? Math.max(72, Math.min(tooltip.x, tooltip.width - 72)) : 0;
-  const tooltipY = tooltip ? Math.max(44, Math.min(tooltip.y, tooltip.height - 18)) : 0;
 
   return (
-    <div className="pie-panel" onMouseLeave={() => setTooltip(null)}>
-      <div className="pie-chart-shell">
-        <svg viewBox="0 0 260 260" role="img" aria-label="占比饼图">
-          <circle cx={center} cy={center} r={radius} className="pie-track" />
-          {slices.map((slice) => (
-            <path
-              key={`${slice.label}-${slice.index}`}
-              d={slice.path}
-              fill={slice.color}
-              className={activeIndex === slice.index ? "pie-slice pie-slice--active" : "pie-slice"}
-              onMouseEnter={(event) => showTooltip(slice.index, event)}
-              onMouseMove={(event) => showTooltip(slice.index, event)}
-              onFocus={() => setActiveIndex(slice.index)}
-              tabIndex={0}
-            >
-              <title>{slice.label} {formatPercent(slice.percent)}</title>
-            </path>
-          ))}
-        </svg>
-        {tooltip ? (
-          <div className="pie-tooltip" style={{ left: tooltipX, top: tooltipY }}>
-            <strong>{active.label}</strong>
-            <span>{formatPercent(active.value / total)}</span>
-          </div>
-        ) : null}
-      </div>
-      <div className="pie-legend">
-        {slices.slice(0, 11).map((slice) => (
-          <button type="button" key={slice.label} onMouseEnter={() => setActiveIndex(slice.index)} onClick={() => setActiveIndex(slice.index)}>
-            <i style={{ background: slice.color }} />
-            <span>{slice.label}</span>
-            <strong>{formatPercent(slice.percent)}</strong>
-          </button>
-        ))}
-      </div>
+    <div className="pie-panel">
+      <EChart
+        option={option}
+        height={280}
+        ariaLabel={`持仓占比饼图：${visible.map((row) => `${row.label} ${formatPercent(row.value / total)}`).join("，")}。图例可选择显示或隐藏。`}
+      />
     </div>
   );
-}
-
-function describePieSlice(
-  cx: number,
-  cy: number,
-  radius: number,
-  startAngle: number,
-  endAngle: number,
-) {
-  const safeEndAngle = endAngle - startAngle >= 359.99 ? startAngle + 359.99 : endAngle;
-  const start = polarToCartesian(cx, cy, radius, safeEndAngle);
-  const end = polarToCartesian(cx, cy, radius, startAngle);
-  const largeArcFlag = safeEndAngle - startAngle <= 180 ? "0" : "1";
-  return [
-    "M", cx, cy,
-    "L", start.x, start.y,
-    "A", radius, radius, 0, largeArcFlag, 0, end.x, end.y,
-    "Z",
-  ].join(" ");
-}
-
-function polarToCartesian(cx: number, cy: number, radius: number, angleInDegrees: number) {
-  const angleInRadians = (angleInDegrees - 90) * Math.PI / 180;
-  return {
-    x: cx + radius * Math.cos(angleInRadians),
-    y: cy + radius * Math.sin(angleInRadians),
-  };
 }
 
 function IndustryMappingEditor({
@@ -780,218 +724,172 @@ function CandlestickChart({
   currency: string;
   symbol: string;
 }) {
-  const [zoom, setZoom] = useState(1);
-  const [panStart, setPanStart] = useState(0);
-  const [hovered, setHovered] = useState<{
-    index: number;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  } | null>(null);
-  const width = 920;
-  const height = 360;
-  const padding = { top: 24, right: 28, bottom: 36, left: 64 };
-  const volumeHeight = 48;
-  const volumeGap = 18;
-  const innerWidth = width - padding.left - padding.right;
-  const innerHeight = height - padding.top - padding.bottom - volumeHeight - volumeGap;
-  const volumeTop = padding.top + innerHeight + volumeGap;
-  const maxZoom = Math.max(1, Math.min(12, history.length / 8));
-  const effectiveZoom = clamp(zoom, 1, maxZoom);
-  const visibleCount = Math.max(2, Math.min(history.length, Math.round(history.length / effectiveZoom)));
-  const maxStart = Math.max(0, history.length - visibleCount);
-  const startIndex = Math.round(clamp(panStart, 0, maxStart));
-  const visibleHistory = history.slice(startIndex, startIndex + visibleCount);
+  const chartHistory = history
+    .map((row) => {
+      const date = getHistoryDate(row);
+      const close = asNumber(row.close, 0);
+      return {
+        row,
+        date,
+        open: asNumber(row.open ?? row.close, close),
+        close,
+        low: asNumber(row.low ?? row.close, close),
+        high: asNumber(row.high ?? row.close, close),
+        volume: asNumber(row.volume, 0),
+      };
+    })
+    .filter((item) => item.date !== "-")
+    .sort((left, right) => left.date.localeCompare(right.date));
   const chartMarkers = markers
-    .map((marker, index) => ({
-      marker,
-      index,
+    .map((marker) => ({
       date: formatDate(marker.date ?? marker.trade_date_iso ?? marker.trade_date),
       side: asText(marker.side, "").toUpperCase(),
       price: asNumber(marker.price ?? marker.trade_price, 0),
       quantity: Math.abs(asNumber(marker.quantity, 0)),
     }))
     .filter((marker) => marker.date !== "-" && (marker.side === "BUY" || marker.side === "SELL"));
-  const visibleDates = new Set(visibleHistory.map(getHistoryDate));
-  const visibleMarkers = chartMarkers.filter((marker) => visibleDates.has(marker.date));
+  const dates = new Set(chartHistory.map((item) => item.date));
+  const visibleMarkers = chartMarkers.filter((marker) => dates.has(marker.date));
   const markersByDate = new Map<string, typeof chartMarkers>();
   for (const marker of visibleMarkers) {
     markersByDate.set(marker.date, [...(markersByDate.get(marker.date) ?? []), marker]);
   }
-  const prices = visibleHistory.flatMap((row) => [
-    asNumber(row.high ?? row.close, 0),
-    asNumber(row.low ?? row.close, 0),
-    asNumber(row.open ?? row.close, 0),
-    asNumber(row.close, 0),
-  ]).concat(visibleMarkers.map((marker) => marker.price)).filter(Number.isFinite);
+  const prices = chartHistory
+    .flatMap((item) => [item.high, item.low, item.open, item.close])
+    .concat(visibleMarkers.map((marker) => marker.price))
+    .filter(Number.isFinite);
   const rawMin = Math.min(...(prices.length ? prices : [0]));
   const rawMax = Math.max(...(prices.length ? prices : [1]));
   const rawRange = rawMax - rawMin || Math.max(Math.abs(rawMax) * 0.02, 1);
   const min = rawMin - rawRange * 0.04;
   const max = rawMax + rawRange * 0.04;
-  const range = max - min || 1;
-  const maxVolume = Math.max(...visibleHistory.map((row) => asNumber(row.volume, 0)), 1);
-  const xFor = (index: number) => padding.left + (visibleHistory.length === 1 ? innerWidth / 2 : (index / (visibleHistory.length - 1)) * innerWidth);
-  const yFor = (price: unknown) => padding.top + (1 - (asNumber(price, min) - min) / range) * innerHeight;
-  const candleWidth = clamp(innerWidth / Math.max(visibleHistory.length, 1) * 0.58, 7, 18);
-  const hoverBandWidth = Math.max(candleWidth + 8, innerWidth / Math.max(visibleHistory.length, 1));
-  const dateIndex = new Map(visibleHistory.map((row, index) => [getHistoryDate(row), index]));
-  const hoveredRow = hovered ? visibleHistory[hovered.index] : null;
-  const hoveredDate = hoveredRow ? getHistoryDate(hoveredRow) : "";
-  const hoveredMarkers = hoveredDate ? markersByDate.get(hoveredDate) ?? [] : [];
-  const hoveredOpen = asNumber(hoveredRow?.open ?? hoveredRow?.close, 0);
-  const hoveredClose = asNumber(hoveredRow?.close, 0);
-  const hoveredReturn = hoveredOpen ? (hoveredClose - hoveredOpen) / hoveredOpen : null;
-  const tooltipY = hovered ? clamp(hovered.y, 96, hovered.height - 44) : 0;
-  const tooltipSide = hovered && hovered.x > hovered.width - 260 ? " kline-tooltip--left" : "";
-
-  const showCandleTooltip = (index: number, event: MouseEvent<SVGRectElement>) => {
-    const bounds = event.currentTarget.closest(".position-chart")?.getBoundingClientRect();
-    if (!bounds) return;
-    setHovered({
-      index,
-      x: event.clientX - bounds.left,
-      y: event.clientY - bounds.top,
-      width: bounds.width,
-      height: bounds.height,
-    });
-  };
-
-  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
-    if (history.length <= 2) return;
-    event.preventDefault();
-    const isHorizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
-    if (isHorizontal && effectiveZoom > 1) {
-      setPanStart((current) => clamp(current + (event.deltaX / Math.max(innerWidth, 1)) * visibleCount, 0, maxStart));
-      setHovered(null);
-      return;
-    }
-
-    const svgBounds = event.currentTarget.querySelector("svg")?.getBoundingClientRect();
-    const chartLeft = svgBounds ? svgBounds.left + (padding.left / width) * svgBounds.width : event.currentTarget.getBoundingClientRect().left;
-    const chartWidth = svgBounds ? (innerWidth / width) * svgBounds.width : event.currentTarget.getBoundingClientRect().width;
-    const pointerRatio = clamp((event.clientX - chartLeft) / Math.max(chartWidth, 1), 0, 1);
-    const anchorIndex = startIndex + pointerRatio * Math.max(visibleCount - 1, 1);
-    const nextZoom = clamp(effectiveZoom * (event.deltaY < 0 ? 1.18 : 0.84), 1, maxZoom);
-    const nextVisibleCount = Math.max(2, Math.min(history.length, Math.round(history.length / nextZoom)));
-    const nextMaxStart = Math.max(0, history.length - nextVisibleCount);
-    setZoom(nextZoom);
-    setPanStart(clamp(anchorIndex - pointerRatio * Math.max(nextVisibleCount - 1, 1), 0, nextMaxStart));
-    setHovered(null);
+  const historyByDate = new Map(chartHistory.map((item) => [item.date, item]));
+  const startPercent = chartHistory.length > 60 ? Math.max(0, 100 - (60 / chartHistory.length) * 100) : 0;
+  const option: EChartsOption = {
+    animationDuration: 200,
+    aria: { enabled: true, decal: { show: true } },
+    axisPointer: { link: [{ xAxisIndex: [0, 1] }] },
+    grid: [
+      { left: 22, right: 22, top: 12, height: "58%", containLabel: true },
+      { left: 22, right: 22, top: "72%", height: "10%", containLabel: true },
+    ],
+    tooltip: {
+      trigger: "axis",
+      renderMode: "richText",
+      axisPointer: { type: "cross" },
+      formatter: (params) => {
+        const items = Array.isArray(params) ? params : [params];
+        const date = asText((items[0] as { axisValue?: unknown }).axisValue, "");
+        const item = historyByDate.get(date);
+        if (!item) return formatDate(date);
+        const dailyReturn = item.open ? (item.close - item.open) / item.open : null;
+        const lines = [
+          date,
+          `开盘价 ${formatCurrency(item.open, currency)}`,
+          `最高价 ${formatCurrency(item.high, currency)}`,
+          `最低价 ${formatCurrency(item.low, currency)}`,
+          `收盘价 ${formatCurrency(item.close, currency)}`,
+          `涨跌幅 ${dailyReturn === null ? "-" : formatPercent(dailyReturn)}`,
+          `成交量 ${formatNumber(item.volume, 0)}`,
+          `市盈率 ${formatPeRatio(item.row)}`,
+          `PE行业位置 ${formatPeIndustryPosition(item.row)}`,
+          ...(markersByDate.get(date) ?? []).map((marker) => {
+            const label = marker.side === "BUY" ? "买入" : "卖出";
+            return `${label} ${formatNumber(marker.quantity, 0)} @ ${formatCurrency(marker.price, currency)}`;
+          }),
+        ];
+        return lines.join("\n");
+      },
+    },
+    xAxis: [
+      {
+        type: "category",
+        data: chartHistory.map((item) => item.date),
+        boundaryGap: true,
+        axisLine: { lineStyle: { color: "rgba(32,35,31,0.24)" } },
+        axisLabel: { color: "#697067", hideOverlap: true },
+      },
+      {
+        type: "category",
+        gridIndex: 1,
+        data: chartHistory.map((item) => item.date),
+        boundaryGap: true,
+        axisLabel: { show: false },
+        axisTick: { show: false },
+      },
+    ],
+    yAxis: [
+      {
+        scale: true,
+        splitNumber: 4,
+        axisLabel: { color: "#697067", formatter: (value: number) => formatCurrency(value, currency) },
+        splitLine: { lineStyle: { color: "rgba(32,35,31,0.1)", type: "dashed" } },
+      },
+      {
+        gridIndex: 1,
+        scale: true,
+        axisLabel: { show: false },
+        splitLine: { show: false },
+      },
+    ],
+    dataZoom: [
+      { type: "inside", xAxisIndex: [0, 1], start: startPercent, end: 100, minValueSpan: 2 },
+      { type: "slider", xAxisIndex: [0, 1], start: startPercent, end: 100, bottom: 4, height: 18, brushSelect: false },
+    ],
+    series: [
+      {
+        name: "K 线",
+        type: "candlestick",
+        data: chartHistory.map((item) => [item.open, item.close, item.low, item.high]),
+        itemStyle: {
+          color: "#0f7a4d",
+          color0: "#c23a32",
+          borderColor: "#0f7a4d",
+          borderColor0: "#c23a32",
+        },
+      },
+      {
+        name: "成交量",
+        type: "bar",
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+        data: chartHistory.map((item) => ({
+          value: item.volume,
+          itemStyle: { color: item.close >= item.open ? "rgba(15,122,77,0.32)" : "rgba(194,58,50,0.32)" },
+        })),
+      },
+      {
+        name: "买入",
+        type: "scatter",
+        data: visibleMarkers.filter((marker) => marker.side === "BUY").map((marker) => [marker.date, marker.price, marker.quantity]),
+        symbolSize: 18,
+        itemStyle: { color: "#0f7a4d", borderColor: "#fff", borderWidth: 1.5 },
+        label: { show: true, formatter: "B", color: "#fff", fontSize: 9, fontWeight: 900 },
+        z: 5,
+      },
+      {
+        name: "卖出",
+        type: "scatter",
+        data: visibleMarkers.filter((marker) => marker.side === "SELL").map((marker) => [marker.date, marker.price, marker.quantity]),
+        symbolSize: 18,
+        itemStyle: { color: "#c23a32", borderColor: "#fff", borderWidth: 1.5 },
+        label: { show: true, formatter: "S", color: "#fff", fontSize: 9, fontWeight: 900 },
+        z: 5,
+      },
+    ],
   };
 
   return (
-    <div className="position-chart" onWheel={handleWheel} onMouseLeave={() => setHovered(null)}>
+    <div className="position-chart">
       <div className="position-chart__header">
         <strong>{symbol} K 线</strong>
         <span>{formatCurrency(min, currency)} - {formatCurrency(max, currency)}</span>
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${symbol} K 线`}>
-        {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-          const y = padding.top + ratio * innerHeight;
-          const value = max - ratio * range;
-          return (
-            <g key={ratio}>
-              <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} className="chart-grid-line" />
-              <text x={padding.left - 10} y={y + 4} className="chart-axis-label" textAnchor="end">{formatCurrency(value, currency)}</text>
-            </g>
-          );
-        })}
-        {visibleHistory.map((row, index) => {
-          const open = asNumber(row.open ?? row.close, 0);
-          const close = asNumber(row.close, 0);
-          const high = asNumber(row.high ?? close, close);
-          const low = asNumber(row.low ?? close, close);
-          const x = xFor(index);
-          const yOpen = yFor(open);
-          const yClose = yFor(close);
-          const top = Math.min(yOpen, yClose);
-          const bodyHeight = Math.max(2, Math.abs(yClose - yOpen));
-          const tone = close >= open ? "positive" : "negative";
-          return (
-            <g key={`${getHistoryDate(row)}-${index}`} className={`candle candle--${tone}`}>
-              <title>{getHistoryDate(row)} 收盘 {formatCurrency(close, currency)}</title>
-              <line x1={x} x2={x} y1={yFor(high)} y2={yFor(low)} />
-              <rect x={x - candleWidth / 2} y={top} width={candleWidth} height={bodyHeight} rx="1.5" />
-            </g>
-          );
-        })}
-        <line x1={padding.left} x2={width - padding.right} y1={volumeTop + volumeHeight} y2={volumeTop + volumeHeight} className="chart-grid-line" />
-        {visibleHistory.map((row, index) => {
-          const close = asNumber(row.close, 0);
-          const open = asNumber(row.open ?? close, close);
-          const volume = asNumber(row.volume, 0);
-          const barHeight = Math.max(1, (volume / maxVolume) * volumeHeight);
-          const x = xFor(index);
-          const tone = close >= open ? "positive" : "negative";
-          return (
-            <rect
-              key={`volume-${getHistoryDate(row)}-${index}`}
-              className={`volume-bar volume-bar--${tone}`}
-              x={x - candleWidth / 2}
-              y={volumeTop + volumeHeight - barHeight}
-              width={candleWidth}
-              height={barHeight}
-              rx="1"
-            />
-          );
-        })}
-        {visibleMarkers.map((marker) => {
-          const exactIndex = dateIndex.get(marker.date);
-          if (exactIndex === undefined) return null;
-          const x = xFor(exactIndex);
-          const y = yFor(marker.price);
-          const label = marker.side === "BUY" ? "B" : "S";
-          return (
-            <g key={`${marker.side}-${marker.date}-${marker.index}`} className={`trade-marker trade-marker--${marker.side === "BUY" ? "buy" : "sell"}`}>
-              <title>{marker.date} {marker.side} {formatNumber(marker.quantity, 0)} @ {formatCurrency(marker.price, currency)}</title>
-              <circle cx={x} cy={y} r="8" />
-              <text x={x} y={y + 3} textAnchor="middle">{label}</text>
-            </g>
-          );
-        })}
-        {hovered ? (
-          <line x1={xFor(hovered.index)} x2={xFor(hovered.index)} y1={padding.top} y2={volumeTop + volumeHeight} className="kline-crosshair" />
-        ) : null}
-        {visibleHistory.map((row, index) => {
-          const x = xFor(index);
-          return (
-            <rect
-              key={`hover-${getHistoryDate(row)}-${index}`}
-              className="kline-hover-band"
-              x={x - hoverBandWidth / 2}
-              y={padding.top}
-              width={hoverBandWidth}
-              height={volumeTop + volumeHeight - padding.top}
-              onMouseEnter={(event) => showCandleTooltip(index, event)}
-              onMouseMove={(event) => showCandleTooltip(index, event)}
-            />
-          );
-        })}
-      </svg>
-      {hovered && hoveredRow ? (
-        <div className={`kline-tooltip${tooltipSide}`} style={{ left: hovered.x, top: tooltipY }}>
-          <strong>{hoveredDate}</strong>
-          <div><span>开盘价</span><b>{formatCurrency(hoveredOpen, currency)}</b></div>
-          <div><span>收盘价</span><b>{formatCurrency(hoveredClose, currency)}</b></div>
-          <div><span>涨跌幅</span><b className={`delta-text ${deltaClass(hoveredReturn ?? 0)}`}>{hoveredReturn === null ? "-" : formatPercent(hoveredReturn)}</b></div>
-          <div><span>成交量</span><b>{formatNumber(asNumber(hoveredRow.volume, 0), 0)}</b></div>
-          <div><span>市盈率</span><b>{formatPeRatio(hoveredRow)}</b></div>
-          <div><span>PE行业位置</span><b>{formatPeIndustryPosition(hoveredRow)}</b></div>
-          {hoveredMarkers.map((marker) => {
-            const label = marker.side === "BUY" ? "买入" : "卖出";
-            return (
-              <div className="kline-tooltip__trade" key={`${marker.side}-${marker.date}-${marker.index}`}>
-                <span>{label}价</span>
-                <b>{formatCurrency(marker.price, currency)}</b>
-                <span>{label}数量</span>
-                <b>{formatNumber(marker.quantity, 0)}</b>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
+      <EChart
+        option={option}
+        height={360}
+        ariaLabel={`${symbol} K 线、成交量和买卖点图；悬停可查看开高低收、涨跌幅、成交量、市盈率、行业位置和交易详情，可缩放和平移`}
+      />
     </div>
   );
 }
@@ -1046,49 +944,71 @@ function TradeMarkerTimeline({
   if (visible.length === 0) {
     return <EmptyState title="K 线数据不完整" detail="已有持仓，但暂未找到可标注的交易记录。" />;
   }
-  const width = 920;
-  const height = 260;
-  const padding = { top: 28, right: 28, bottom: 42, left: 64 };
   const prices = visible.map((marker) => marker.price);
   const min = Math.min(...prices);
   const max = Math.max(...prices);
-  const range = max - min || 1;
-  const innerWidth = width - padding.left - padding.right;
-  const innerHeight = height - padding.top - padding.bottom;
-  const xFor = (index: number) => padding.left + (visible.length === 1 ? innerWidth / 2 : (index / (visible.length - 1)) * innerWidth);
-  const yFor = (price: number) => padding.top + (1 - (price - min) / range) * innerHeight;
-  const points = visible.map((marker, index) => `${xFor(index)},${yFor(marker.price)}`).join(" ");
+  const option: EChartsOption = {
+    animationDuration: 200,
+    aria: { enabled: true, decal: { show: true } },
+    grid: { left: 22, right: 22, top: 14, bottom: 26, containLabel: true },
+    tooltip: {
+      trigger: "axis",
+      renderMode: "richText",
+      formatter: (params) => {
+        const items = Array.isArray(params) ? params : [params];
+        const index = asNumber((items[0] as { dataIndex?: unknown }).dataIndex, 0);
+        const marker = visible[index];
+        if (!marker) return "";
+        const label = marker.side === "BUY" ? "买入" : "卖出";
+        return `${marker.date}\n${label}价 ${formatCurrency(marker.price, currency)}\n${label}数量 ${formatNumber(marker.quantity, 0)}`;
+      },
+    },
+    xAxis: {
+      type: "category",
+      data: visible.map((marker) => marker.date),
+      axisLabel: { color: "#697067", hideOverlap: true },
+    },
+    yAxis: {
+      type: "value",
+      scale: true,
+      min,
+      max: min === max ? max + 1 : max,
+      axisLabel: { color: "#697067", formatter: (value: number) => formatCurrency(value, currency) },
+      splitLine: { lineStyle: { color: "rgba(32,35,31,0.1)", type: "dashed" } },
+    },
+    series: [
+      {
+        name: "成交价格",
+        type: "line",
+        data: visible.map((marker) => marker.price),
+        showSymbol: false,
+        lineStyle: { color: "#11140f", width: 2.4 },
+      },
+      {
+        name: "买入",
+        type: "scatter",
+        data: visible.map((marker) => marker.side === "BUY" ? marker.price : null),
+        symbolSize: 18,
+        itemStyle: { color: "#0f7a4d", borderColor: "#fff", borderWidth: 1.5 },
+        label: { show: true, formatter: "B", color: "#fff", fontSize: 9, fontWeight: 900 },
+      },
+      {
+        name: "卖出",
+        type: "scatter",
+        data: visible.map((marker) => marker.side === "SELL" ? marker.price : null),
+        symbolSize: 18,
+        itemStyle: { color: "#c23a32", borderColor: "#fff", borderWidth: 1.5 },
+        label: { show: true, formatter: "S", color: "#fff", fontSize: 9, fontWeight: 900 },
+      },
+    ],
+  };
   return (
     <div className="position-chart position-chart--timeline">
       <div className="position-chart__header">
         <strong>{symbol} 买卖点</strong>
         <span>历史 K 线待导入</span>
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${symbol} 买卖点`}>
-        {[0, 0.5, 1].map((ratio) => {
-          const y = padding.top + ratio * innerHeight;
-          const value = max - ratio * range;
-          return (
-            <g key={ratio}>
-              <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} className="chart-grid-line" />
-              <text x={padding.left - 10} y={y + 4} className="chart-axis-label" textAnchor="end">{formatCurrency(value, currency)}</text>
-            </g>
-          );
-        })}
-        <polyline points={points} fill="none" className="trade-timeline-line" />
-        {visible.map((marker, index) => {
-          const x = xFor(index);
-          const y = yFor(marker.price);
-          const label = marker.side === "BUY" ? "B" : "S";
-          return (
-            <g key={`${marker.side}-${marker.date}-${index}`} className={`trade-marker trade-marker--${marker.side === "BUY" ? "buy" : "sell"}`}>
-              <title>{marker.date} {marker.side} {formatNumber(marker.quantity, 0)} @ {formatCurrency(marker.price, currency)}</title>
-              <circle cx={x} cy={y} r="8" />
-              <text x={x} y={y + 3} textAnchor="middle">{label}</text>
-            </g>
-          );
-        })}
-      </svg>
+      <EChart option={option} height={260} ariaLabel={`${symbol} 买卖点时间线；悬停可查看日期、方向、价格和数量`} />
     </div>
   );
 }

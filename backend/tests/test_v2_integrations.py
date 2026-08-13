@@ -9,13 +9,11 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.portfolio_analysis_contracts import AINarrativePayload
 from app.api.portfolio_analysis_contracts import AnalysisStatus
 from app.api.portfolio_analysis_contracts import PortfolioAnalysisSectionKey
 from app.services.ai_narrative_service import AINarrativeService
 from app.services.ai_narrative_service import DeepSeekChatCompletionsProvider
 from app.services.ai_narrative_service import MiniMaxChatCompletionsProvider
-from app.services.ai_narrative_service import OpenAIResponsesProvider
 from app.services.ai_narrative_service import PORTFOLIO_TOTAL_BUDGET_SECONDS
 from app.services.ai_narrative_service import build_ai_provider
 from app.api.routes import portfolio_analysis as portfolio_route
@@ -220,7 +218,8 @@ def test_futu_provider_exposes_only_read_only_methods() -> None:
     forbidden = {"place_order", "modify_order", "cancel_order", "submit_order", "buy", "sell", "unlock_trade"}
 
     assert forbidden.isdisjoint(public)
-    assert {"get_quote", "get_kline_history", "get_option_indicators", "get_sentiment"}.issubset(public)
+    assert {"get_quote", "get_kline_history", "get_sentiment"}.issubset(public)
+    assert "get_option_indicators" not in public
 
 
 def test_futu_symbol_normalization_defaults_plain_tickers_to_us() -> None:
@@ -1054,231 +1053,6 @@ def test_deepseek_portfolio_overlay_restores_missing_sources_from_tavily_values(
     assert len(overlay["risk_rows"][0]["tracking_points"]) == 5
 
 
-def test_minimax_provider_fails_closed_without_key() -> None:
-    provider = build_ai_provider(provider_name="minimax", openai_api_key="", minimax_api_key="")
-    narrative = provider.generate(section="market", metrics={})
-
-    assert narrative.provider == "minimax"
-    assert narrative.status == "unavailable"
-    assert narrative.reason == "minimax_api_key_not_configured"
-
-
-def test_minimax_provider_uses_reasoning_split_for_m2_chat_payload(monkeypatch) -> None:
-    seen_payload: dict | None = None
-
-    class Response:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": json.dumps(
-                                {
-                                    "summary": "摘要",
-                                    "bullets": ["要点"],
-                                    "risks": ["风险"],
-                                    "confidence": 0.7,
-                                },
-                                ensure_ascii=False,
-                            )
-                        }
-                    }
-                ]
-            }
-
-    def fake_post(_url: str, **kwargs):
-        nonlocal seen_payload
-        seen_payload = kwargs["json"]
-        return Response()
-
-    monkeypatch.setattr("app.services.ai_narrative_service.httpx.post", fake_post)
-
-    provider = MiniMaxChatCompletionsProvider(api_key="mini-key")
-    narrative = provider.generate(section="market", metrics={"x": 1})
-
-    assert narrative.status == AnalysisStatus.READY
-    assert seen_payload is not None
-    assert "response_format" not in seen_payload
-    assert seen_payload["reasoning_split"] is True
-    assert seen_payload["max_tokens"] == 1600
-
-
-def test_minimax_provider_retries_with_response_format_when_plain_content_empty(monkeypatch) -> None:
-    seen_payloads: list[dict] = []
-
-    class EmptyResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {"choices": [{"message": {"content": ""}}]}
-
-    class JsonResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": json.dumps(
-                                {
-                                    "summary": "兼容重试摘要",
-                                    "bullets": ["要点"],
-                                    "risks": ["风险"],
-                                    "confidence": 0.72,
-                                },
-                                ensure_ascii=False,
-                            )
-                        }
-                    }
-                ]
-            }
-
-    def fake_post(_url: str, **kwargs):
-        seen_payloads.append(kwargs["json"])
-        return EmptyResponse() if len(seen_payloads) == 1 else JsonResponse()
-
-    monkeypatch.setattr("app.services.ai_narrative_service.httpx.post", fake_post)
-
-    provider = MiniMaxChatCompletionsProvider(api_key="mini-key")
-    narrative = provider.generate(section="market", metrics={"x": 1})
-
-    assert narrative.status == AnalysisStatus.READY
-    assert narrative.summary == "兼容重试摘要"
-    assert len(seen_payloads) == 2
-    assert "response_format" not in seen_payloads[0]
-    assert seen_payloads[1]["response_format"] == {"type": "json_object"}
-
-
-def test_minimax_provider_reads_reasoning_content_when_message_content_empty(monkeypatch) -> None:
-    class Response:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": "",
-                            "reasoning_content": json.dumps(
-                                {
-                                    "summary": "reasoning json",
-                                    "bullets": [],
-                                    "risks": [],
-                                    "confidence": 0.61,
-                                }
-                            ),
-                        }
-                    }
-                ]
-            }
-
-    monkeypatch.setattr("app.services.ai_narrative_service.httpx.post", lambda *_args, **_kwargs: Response())
-
-    provider = MiniMaxChatCompletionsProvider(api_key="mini-key")
-    narrative = provider.generate(section="market", metrics={"x": 1})
-
-    assert narrative.status == AnalysisStatus.READY
-    assert narrative.summary == "reasoning json"
-
-
-def test_minimax_provider_strips_think_tags_before_json_parse(monkeypatch) -> None:
-    class Response:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": (
-                                "<think>这里可能包含推理文字和 {非 JSON 片段}</think>"
-                                + json.dumps(
-                                    {
-                                        "summary": "剥离思考标签后的摘要",
-                                        "bullets": [],
-                                        "risks": [],
-                                        "confidence": 0.66,
-                                    },
-                                    ensure_ascii=False,
-                                )
-                            )
-                        }
-                    }
-                ]
-            }
-
-    monkeypatch.setattr("app.services.ai_narrative_service.httpx.post", lambda *_args, **_kwargs: Response())
-
-    provider = MiniMaxChatCompletionsProvider(api_key="mini-key")
-    narrative = provider.generate(section="market", metrics={"x": 1})
-
-    assert narrative.status == AnalysisStatus.READY
-    assert narrative.summary == "剥离思考标签后的摘要"
-
-
-def test_minimax_provider_reports_non_json_http_body(monkeypatch) -> None:
-    class Response:
-        text = ""
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            raise json.JSONDecodeError("Expecting value", "", 0)
-
-    monkeypatch.setattr("app.services.ai_narrative_service.httpx.post", lambda *_args, **_kwargs: Response())
-
-    provider = MiniMaxChatCompletionsProvider(api_key="mini-key")
-    narrative = provider.generate(section="market", metrics={"x": 1})
-
-    assert narrative.status == AnalysisStatus.ERROR
-    assert narrative.reason is not None
-    assert "AI response is not JSON: empty HTTP body" in narrative.reason
-
-
-def test_minimax_provider_normalizes_scalar_risks_and_percent_confidence(monkeypatch) -> None:
-    class Response:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": json.dumps(
-                                {
-                                    "summary": "摘要",
-                                    "bullets": "单条要点",
-                                    "risks": "单条风险",
-                                    "confidence": 95,
-                                },
-                                ensure_ascii=False,
-                            )
-                        }
-                    }
-                ]
-            }
-
-    monkeypatch.setattr("app.services.ai_narrative_service.httpx.post", lambda *_args, **_kwargs: Response())
-
-    provider = MiniMaxChatCompletionsProvider(api_key="mini-key")
-    narrative = provider.generate(section="market", metrics={"x": 1})
-
-    assert narrative.status == AnalysisStatus.READY
-    assert narrative.bullets == ["单条要点"]
-    assert narrative.risks == ["单条风险"]
-    assert narrative.confidence == 0.95
-
-
 def test_market_analysis_uses_positions_for_market_context(monkeypatch) -> None:
     repo = _repo_with_positions()
     service = SettingsService()
@@ -1528,10 +1302,6 @@ def test_portfolio_analysis_converts_mixed_positions_to_krw() -> None:
 def test_portfolio_analysis_only_uses_structured_ai_overlay_after_manual_refresh(monkeypatch) -> None:
     AINarrativeService._shared_structured_cache.clear()
     AINarrativeService._shared_structured_state.clear()
-    AINarrativeService._shared_structured_cache.clear()
-
-    def fail_generate(self, *, section: str, metrics: dict):
-        raise AssertionError("narrative AI should only run on explicit refresh")
 
     overlay_calls = 0
 
@@ -1540,7 +1310,6 @@ def test_portfolio_analysis_only_uses_structured_ai_overlay_after_manual_refresh
         overlay_calls += 1
         return _valid_portfolio_overlay(metrics)
 
-    monkeypatch.setattr(DeepSeekChatCompletionsProvider, "generate", fail_generate)
     monkeypatch.setattr(DeepSeekChatCompletionsProvider, "generate_portfolio_overlay", fake_overlay)
     repo = _repo_with_positions()
     service = SettingsService()
@@ -1780,89 +1549,7 @@ def test_structured_ai_overlay_pending_expires_instead_of_looping() -> None:
     assert overlay["reason"] == "structured_ai_overlay_timed_out"
 
 
-def test_portfolio_analysis_manual_ai_refresh_does_not_block_on_narrative(monkeypatch) -> None:
-    AINarrativeService._shared_daily_cache.clear()
-    AINarrativeService._shared_refresh_state.clear()
-    AINarrativeService._shared_structured_cache.clear()
-    calls = 0
-
-    def fake_generate(self, *, section: str, metrics: dict):
-        nonlocal calls
-        calls += 1
-        return AINarrativePayload(
-            provider=self.name,
-            model=self.model,
-            status=AnalysisStatus.READY,
-            summary=f"{section} cached summary",
-            bullets=[],
-            risks=[],
-            source_metrics=sorted(metrics.keys()),
-            confidence=0.8,
-        )
-
-    monkeypatch.setattr(DeepSeekChatCompletionsProvider, "generate", fake_generate)
-    monkeypatch.setattr(
-        DeepSeekChatCompletionsProvider,
-        "generate_portfolio_overlay",
-        lambda self, *, metrics: _valid_portfolio_overlay(metrics),
-    )
-    repo = _repo_with_positions()
-    settings = SettingsService()
-    settings.update(ai_provider="deepseek", deepseek_api_key="deepseek-key", tavily_api_key="tavily-key")
-    analysis = PortfolioAnalysisService(
-        raw_repository=repo,
-        settings_service=settings,
-        ai_narrative_service=AINarrativeService(),
-    )
-
-    refreshed = analysis.get_analysis(section=PortfolioAnalysisSectionKey.PORTFOLIO, refresh_ai=True)
-    cached = analysis.get_analysis(section=PortfolioAnalysisSectionKey.PORTFOLIO)
-
-    assert calls == 0
-    assert refreshed.sections.portfolio.narrative.status == AnalysisStatus.READY
-    assert refreshed.sections.portfolio.analysis_meta["ai_overlay_status"] == "ready"
-    assert cached.sections.portfolio.narrative.status == AnalysisStatus.READY
-
-
-def test_openai_provider_generate_calls_responses_api(monkeypatch) -> None:
-    calls: list[dict] = []
-
-    class FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {
-                "output_text": json.dumps(
-                    {
-                        "summary": "组合摘要",
-                        "bullets": ["重点一"],
-                        "risks": ["风险一"],
-                        "confidence": 0.73,
-                    },
-                    ensure_ascii=False,
-                )
-            }
-
-    def fake_post(url: str, **kwargs):
-        calls.append({"url": url, **kwargs})
-        return FakeResponse()
-
-    monkeypatch.setattr("app.services.ai_narrative_service.httpx.post", fake_post)
-    provider = OpenAIResponsesProvider(api_key="sk-test", model="gpt-test")
-
-    narrative = provider.generate(section="portfolio", metrics={"risk": "high"})
-
-    assert calls
-    assert calls[0]["url"] == "https://api.openai.com/v1/responses"
-    assert calls[0]["json"]["model"] == "gpt-test"
-    assert narrative.status == AnalysisStatus.READY
-    assert narrative.summary == "组合摘要"
-
-
 def test_non_deepseek_portfolio_overlay_falls_back_to_local_rules() -> None:
-    AINarrativeService._shared_daily_cache.clear()
-    AINarrativeService._shared_refresh_state.clear()
     AINarrativeService._shared_structured_cache.clear()
     AINarrativeService._shared_structured_state.clear()
 
@@ -1880,77 +1567,9 @@ def test_non_deepseek_portfolio_overlay_falls_back_to_local_rules() -> None:
     assert result.sections.portfolio.risk_rows[0].source.startswith("local_rules_structured_ai")
 
 
-def test_ai_narrative_compacts_large_metrics_before_provider_call() -> None:
-    class CapturingProvider:
-        name = "mock"
-        model = "mock"
-
-        def __init__(self) -> None:
-            self.metrics: dict | None = None
-
-        def generate(self, *, section: str, metrics: dict):
-            self.metrics = metrics
-            return AINarrativePayload(
-                provider=self.name,
-                model=self.model,
-                status=AnalysisStatus.READY,
-                summary="ok",
-                bullets=[],
-                risks=[],
-                source_metrics=sorted(metrics.keys()),
-                confidence=0.7,
-            )
-
-    provider = CapturingProvider()
-    service = AINarrativeService()
-    service.generate(
-        provider=provider,
-        section="market",
-        metrics={
-            "market_pulse": [
-                {
-                    "title": "卡片",
-                    "value": 1,
-                    "sparkline": [{"date": "2026-05-01", "value": index} for index in range(100)],
-                    "playbook": [{"label": "x"} for _ in range(100)],
-                    "reading": "很长" * 300,
-                }
-            ],
-            "top_positions": [{"symbol": str(index), "weight": index} for index in range(20)],
-        },
-        force=True,
-    )
-
-    assert provider.metrics is not None
-    pulse = provider.metrics["market_pulse"][0]
-    assert "sparkline" not in pulse
-    assert "playbook" not in pulse
-    assert len(pulse["reading"]) < 270
-    assert len(provider.metrics["top_positions"]) == 6
-
-
-def test_minimax_portfolio_overlay_is_not_used_for_web_research(monkeypatch) -> None:
-    AINarrativeService._shared_daily_cache.clear()
-    AINarrativeService._shared_refresh_state.clear()
+def test_minimax_portfolio_overlay_is_not_used_for_web_research() -> None:
     AINarrativeService._shared_structured_cache.clear()
     AINarrativeService._shared_structured_state.clear()
-    calls = 0
-
-    def fake_generate(self, *, section: str, metrics: dict):
-        nonlocal calls
-        calls += 1
-        return AINarrativePayload(
-            provider=self.name,
-            model=self.model,
-            status=AnalysisStatus.READY,
-            summary="should not block portfolio refresh",
-            bullets=[],
-            risks=[],
-            source_metrics=sorted(metrics.keys()),
-            confidence=0.8,
-        )
-
-    monkeypatch.setattr(MiniMaxChatCompletionsProvider, "generate", fake_generate)
     repo = _repo_with_positions()
     settings = SettingsService()
     settings.update(ai_provider="minimax", minimax_api_key="mini-key")
@@ -1962,7 +1581,6 @@ def test_minimax_portfolio_overlay_is_not_used_for_web_research(monkeypatch) -> 
 
     result = analysis.get_analysis(section=PortfolioAnalysisSectionKey.PORTFOLIO, refresh_ai=True)
 
-    assert calls == 0
     assert result.sections.portfolio.analysis_meta["ai_overlay_provider"] == "local_rules"
     assert result.sections.portfolio.analysis_meta["ai_overlay_status"] == "ready"
     assert result.sections.portfolio.analysis_meta["ai_overlay_reason"] == "fallback_after_portfolio_web_research_requires_deepseek_and_tavily"

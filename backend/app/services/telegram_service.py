@@ -5,12 +5,9 @@ from typing import Any, Protocol
 import httpx
 
 from app.api.portfolio_analysis_contracts import PortfolioAnalysisSectionKey
-from app.services.market_data_provider import MarketDataProvider
 from app.services.portfolio_analysis_service import PortfolioAnalysisService
 from app.services.settings_service import SettingsService
 from app.services.option_expiration import build_expiration_alerts
-from app.utils.numbers import first_number
-from app.utils.numbers import positive_float_or_none
 from app.utils.numbers import to_float as _to_float
 
 
@@ -52,12 +49,10 @@ class TelegramCommandService:
         settings_service: SettingsService,
         analysis_service: PortfolioAnalysisService,
         raw_repository: object | None = None,
-        market_data_provider: MarketDataProvider | None = None,
     ) -> None:
         self._settings_service = settings_service
         self._analysis_service = analysis_service
         self._raw_repository = raw_repository
-        self._market_data_provider = market_data_provider
 
     def handle_command(self, *, chat_id: str, text: str) -> dict[str, object]:
         settings = self._settings_service.get()
@@ -198,43 +193,6 @@ class TelegramCommandService:
         total = sum(_to_float(row.get("amount")) for row in rows)
         return f"现金流记录数={len(rows)}，合计={round(total, 2)}"
 
-    def _price_history_context(self, positions: object) -> list[dict[str, Any]]:
-        if not isinstance(positions, list):
-            return []
-        symbols = [
-            str(row.get("symbol") or "").upper()
-            for row in positions
-            if isinstance(row, dict) and str(row.get("symbol") or "").strip()
-        ]
-        results = []
-        for symbol in list(dict.fromkeys(symbols))[:5]:
-            cached_points = _cached_price_history(self._raw_repository, symbol=symbol, limit=30)
-            provider_points = []
-            if self._market_data_provider is not None:
-                try:
-                    provider_points = [
-                        {
-                            "date": point.date,
-                            "close": point.close,
-                            "source": point.source,
-                        }
-                        for point in self._market_data_provider.get_kline_history(symbol, days=30)
-                        if point.close is not None
-                    ]
-                except Exception:
-                    provider_points = []
-            points = _merge_history_points(cached_points, provider_points)[-30:]
-            results.append(
-                {
-                    "symbol": symbol,
-                    "status": "ready" if points else "missing_data",
-                    "source": _history_source_label(cached_points=cached_points, provider_points=provider_points),
-                    "points": points[-10:],
-                    "summary": _price_history_summary(points),
-                }
-            )
-        return results
-
 
 class TelegramUpdatePollingService:
     def __init__(
@@ -355,213 +313,6 @@ def _to_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
-
-
-def _top_position_context(repository: object | None, *, limit: int) -> list[dict[str, Any]]:
-    if repository is None or not hasattr(repository, "es"):
-        return []
-    try:
-        rows = repository.es.search(
-            index="ibkr_position_snapshots_v1",
-            size=5000,
-            sort_field="report_date",
-            descending=True,
-        )
-    except Exception:
-        return []
-    position_rows = [row for row in rows if isinstance(row, dict)]
-    latest_report_date = _latest_report_date(position_rows)
-    if latest_report_date:
-        position_rows = [
-            row
-            for row in position_rows
-            if str(row.get("report_date") or row.get("report_date_iso") or "") == latest_report_date
-        ]
-    realized_by_symbol = _realized_pnl_by_symbol(repository)
-    normalized = [
-        _position_context_row(row, realized_pnl=realized_by_symbol.get(str(row.get("symbol") or "").upper()))
-        for row in position_rows
-    ]
-    normalized = [row for row in normalized if row.get("symbol")]
-    normalized.sort(key=lambda row: abs(_to_float(row.get("market_value"))), reverse=True)
-    return normalized[:limit]
-
-
-def _latest_report_date(rows: list[dict[str, Any]]) -> str:
-    dates = [
-        str(row.get("report_date") or row.get("report_date_iso") or "")
-        for row in rows
-        if row.get("report_date") or row.get("report_date_iso")
-    ]
-    return max(dates) if dates else ""
-
-
-def _position_context_row(row: dict[str, Any], *, realized_pnl: float | None) -> dict[str, Any]:
-    market_value = _first_float(
-        row,
-        ("market_value", "market_value_snapshot", "position_value", "value"),
-    )
-    quantity = _first_float(row, ("quantity", "position", "shares"))
-    mark_price = _first_float(row, ("mark_price_snapshot", "mark_price", "current_price", "price"))
-    average_cost = _first_float(row, ("average_cost_price", "cost_basis_price", "avg_cost"))
-    cost_basis = _first_float(row, ("cost_basis_money", "cost_basis", "cost"))
-    unrealized_pnl_raw = first_number(
-        row,
-        (
-            "unrealized_pnl",
-            "unrealized_pnl_snapshot",
-            "fifo_pnl_unrealized",
-            "unrealized_profit_loss",
-        ),
-    )
-    unrealized_pnl = round(unrealized_pnl_raw, 6) if unrealized_pnl_raw is not None else None
-    return {
-        "symbol": str(row.get("symbol") or "").upper(),
-        "report_date": row.get("report_date") or row.get("report_date_iso"),
-        "currency": row.get("currency"),
-        "quantity": quantity,
-        "mark_price": mark_price,
-        "average_cost": average_cost,
-        "cost_basis": cost_basis,
-        "market_value": market_value,
-        "unrealized_pnl": unrealized_pnl,
-        "unrealized_pnl_source_field": _first_present_key(
-            row,
-            (
-                "unrealized_pnl",
-                "unrealized_pnl_snapshot",
-                "fifo_pnl_unrealized",
-                "unrealized_profit_loss",
-            ),
-        ),
-        "realized_pnl": realized_pnl,
-    }
-
-
-def _realized_pnl_by_symbol(repository: object | None) -> dict[str, float]:
-    if repository is None or not hasattr(repository, "es"):
-        return {}
-    try:
-        trades = repository.es.search(index="ibkr_trade_records_v1", size=5000)
-    except Exception:
-        return {}
-    totals: dict[str, float] = {}
-    for trade in trades:
-        if not isinstance(trade, dict):
-            continue
-        symbol = str(trade.get("symbol") or "").upper()
-        if not symbol:
-            continue
-        totals[symbol] = totals.get(symbol, 0.0) + _to_float(trade.get("fifo_pnl_realized"))
-    return {symbol: round(value, 6) for symbol, value in totals.items()}
-
-
-def _cached_price_history(repository: object | None, *, symbol: str, limit: int) -> list[dict[str, Any]]:
-    if repository is None or not hasattr(repository, "es"):
-        return []
-    rows: list[dict[str, Any]] = []
-    for index in ("ibkr_symbol_price_history_v1", "market_symbol_price_history_v1"):
-        try:
-            found = repository.es.search(
-                index=index,
-                size=max(limit * 2, limit),
-                term_filters={"symbol": symbol.upper()},
-            )
-        except Exception:
-            found = []
-        for row in found:
-            if not isinstance(row, dict):
-                continue
-            close = _first_float(row, ("close", "close_price", "value", "last", "last_price"))
-            date_value = row.get("date_iso") or row.get("date") or row.get("price_date") or row.get("report_date")
-            if close is None or not date_value:
-                continue
-            rows.append(
-                {
-                    "date": str(date_value)[:10],
-                    "close": close,
-                    "source": str(row.get("source") or index),
-                }
-            )
-    return _dedupe_history_points(rows)[-limit:]
-
-
-def _first_float(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
-    for key in keys:
-        if key not in row:
-            continue
-        value = positive_float_or_none(row.get(key), digits=6)
-        if value is not None:
-            return value
-    return None
-
-
-def _first_present_key(row: dict[str, Any], keys: tuple[str, ...]) -> str | None:
-    for key in keys:
-        if row.get(key) is not None:
-            return key
-    return None
-
-
-def _merge_history_points(*point_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = []
-    for points in point_lists:
-        rows.extend(points)
-    return _dedupe_history_points(rows)
-
-
-def _dedupe_history_points(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    by_date: dict[str, dict[str, Any]] = {}
-    for point in points:
-        date_key = str(point.get("date") or "")[:10]
-        close = positive_float_or_none(point.get("close"), digits=6)
-        if not date_key or close is None:
-            continue
-        by_date[date_key] = {
-            "date": date_key,
-            "close": close,
-            "source": str(point.get("source") or "unknown"),
-        }
-    return [by_date[key] for key in sorted(by_date)]
-
-
-def _history_source_label(*, cached_points: list[dict[str, Any]], provider_points: list[dict[str, Any]]) -> str:
-    sources = []
-    if cached_points:
-        sources.append("local_cache")
-    if provider_points:
-        provider_sources = sorted({str(point.get("source") or "provider") for point in provider_points})
-        sources.extend(provider_sources)
-    return "+".join(dict.fromkeys(sources)) if sources else "missing"
-
-
-def _price_history_summary(points: list[dict[str, Any]]) -> dict[str, Any]:
-    if not points:
-        return {"points": 0}
-    first = points[0]
-    last = points[-1]
-    first_close = positive_float_or_none(first.get("close"), digits=6)
-    last_close = positive_float_or_none(last.get("close"), digits=6)
-    change_pct = None
-    if first_close is not None and last_close is not None and first_close:
-        change_pct = round((last_close - first_close) / first_close * 100, 4)
-    closes = [positive_float_or_none(point.get("close"), digits=6) for point in points]
-    valid_closes = [value for value in closes if value is not None]
-    return {
-        "points": len(points),
-        "start_date": first.get("date"),
-        "end_date": last.get("date"),
-        "start_close": first_close,
-        "end_close": last_close,
-        "change_pct": change_pct,
-        "min_close": min(valid_closes) if valid_closes else None,
-        "max_close": max(valid_closes) if valid_closes else None,
-    }
-
-
-def _status_value(status: object) -> str:
-    value = getattr(status, "value", status)
-    return str(value or "error")
 
 
 def _normalize_command(text: str) -> str:

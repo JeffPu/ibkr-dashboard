@@ -1,23 +1,24 @@
-from dataclasses import asdict
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.api.response_models import STORAGE_UNAVAILABLE_OPENAPI_RESPONSE
 from app.repositories.derived_repository import DerivedRepository
 from app.services.auto_reconciliation_service import AutoReconciliationService
-from app.services.reconciliation_service import ReconciliationResult, ReconciliationService
 
 router = APIRouter()
-service = ReconciliationService()
-latest_result: ReconciliationResult | None = None
 _derived_repository: DerivedRepository | object | None = None
 _auto_reconciliation_service: AutoReconciliationService | object | None = None
-
-
-class ReconciliationRunRequest(BaseModel):
-    left: dict
-    right: dict
+AUTO_RECONCILIATION_FIELDS = (
+    "account_id",
+    "report_date",
+    "status",
+    "snapshot_equity",
+    "snapshot_cash",
+    "positions_total_market_value",
+    "expected_equity",
+    "diff",
+)
+AUTO_RECONCILIATION_REQUIRED_FIELDS = ("account_id", "report_date", "status", "diff")
 
 
 class AutoReconciliationRequest(BaseModel):
@@ -33,25 +34,6 @@ def set_derived_repository(repository: object | None) -> None:
 def set_auto_reconciliation_service(service: object | None) -> None:
     global _auto_reconciliation_service
     _auto_reconciliation_service = service
-
-
-@router.post(
-    "/api/reconciliation/run",
-    responses=STORAGE_UNAVAILABLE_OPENAPI_RESPONSE,
-)
-def run_reconciliation(payload: ReconciliationRunRequest) -> dict:
-    global latest_result
-    latest_result = service.compare(payload.left, payload.right)
-    result = asdict(latest_result)
-    if _derived_repository is not None:
-        _derived_repository.upsert_reconciliation_result(doc_id="latest", doc=result)
-    return {
-        **result,
-        "meta": {
-            "left_fields": sorted(payload.left.keys()),
-            "right_fields": sorted(payload.right.keys()),
-        },
-    }
 
 
 @router.post(
@@ -81,17 +63,12 @@ def run_auto_reconciliation(payload: AutoReconciliationRequest) -> dict:
     responses=STORAGE_UNAVAILABLE_OPENAPI_RESPONSE,
 )
 def get_latest_reconciliation() -> dict:
-    if _derived_repository is not None:
-        saved = _derived_repository.get_latest_reconciliation_result()
-        if saved is None:
-            raise HTTPException(status_code=404, detail="reconciliation result not found")
-        return {
-            **saved,
-            "meta": {"source": "derived"},
-        }
-    if latest_result is None:
+    if _derived_repository is None:
+        raise HTTPException(status_code=503, detail="reconciliation unavailable")
+    saved = _derived_repository.get_latest_reconciliation_result()
+    if saved is None or not all(field in saved for field in AUTO_RECONCILIATION_REQUIRED_FIELDS):
         raise HTTPException(status_code=404, detail="reconciliation result not found")
     return {
-        **asdict(latest_result),
-        "meta": {"source": "memory"},
+        **{field: saved[field] for field in AUTO_RECONCILIATION_FIELDS if field in saved},
+        "meta": {"source": "derived"},
     }

@@ -70,7 +70,6 @@ class QuoteService:
         self.primary_fetcher = primary_fetcher
         self.secondary_fetcher = secondary_fetcher
         self.snapshot_fetcher = snapshot_fetcher
-        self._cache: dict[str, QuoteResult] = {}
 
     def get_latest_quote(self, symbol: str) -> QuoteResult:
         primary_price = self.primary_fetcher(symbol)
@@ -82,7 +81,6 @@ class QuoteService:
                 is_realtime=True,
                 as_of=datetime.now(timezone.utc).isoformat(),
             )
-            self._cache[symbol] = quote
             return quote
 
         secondary_price = self.secondary_fetcher(symbol)
@@ -94,17 +92,8 @@ class QuoteService:
                 is_realtime=True,
                 as_of=datetime.now(timezone.utc).isoformat(),
             )
-            self._cache[symbol] = quote
             return quote
 
-        quote = self.get_snapshot_quote(symbol)
-        self._cache[symbol] = quote
-        return quote
-
-    def get_cached_quote(self, symbol: str) -> QuoteResult:
-        cached = self._cache.get(symbol)
-        if cached is not None:
-            return cached
         return self.get_snapshot_quote(symbol)
 
     def get_snapshot_quote(self, symbol: str) -> QuoteResult:

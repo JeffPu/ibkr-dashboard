@@ -18,12 +18,12 @@ services:
   api:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      args:
+        BACKEND_EXTRAS: "${BACKEND_EXTRAS:-}"
     ports:
       - "8000:8000"
     environment:
       - ES_HOST=http://elasticsearch:9200
-      - ES_AUTH_MODE=none
     volumes:
       - api_config:/root/.config/ibkr-dashboard
     depends_on:
@@ -34,7 +34,6 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
     ports:
       - "5176:5176"
     environment:

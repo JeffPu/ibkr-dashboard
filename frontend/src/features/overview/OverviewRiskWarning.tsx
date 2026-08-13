@@ -9,7 +9,7 @@ import type {
   OverviewRiskWindow,
 } from "../../lib/contracts";
 import { asNumber, clamp, formatDate, formatNumber } from "../../lib/format";
-import { Surface } from "../../components/Primitives";
+import { EmptyState, Surface } from "../../components/Primitives";
 import {
   BENCHMARK_OPTIONS,
   SEVERITY_LABELS,
@@ -20,7 +20,7 @@ import {
   formatPercentPoint,
   formatWeightedContribution,
   normalizePositionBeta,
-  normalizeRiskDashboard,
+  sortRiskDashboard,
   statusLabel,
 } from "./riskCalculations";
 
@@ -30,7 +30,14 @@ interface RiskWarningCacheEntry {
 }
 
 export function OverviewRiskDashboard({ data }: { data: OverviewResponse }) {
-  const dashboard = useMemo(() => normalizeRiskDashboard(data), [data]);
+  const dashboard = useMemo(() => sortRiskDashboard(data.risk_dashboard), [data.risk_dashboard]);
+  if (!dashboard?.metrics.length) {
+    return (
+      <Surface title="持仓核心风险" className="overview-risk-panel">
+        <EmptyState compact title="风险数据不足" detail="后端暂未返回可展示的风险指标。" />
+      </Surface>
+    );
+  }
   return (
     <Surface
       title="持仓核心风险"

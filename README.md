@@ -194,7 +194,7 @@ For continued development, use local development mode. A single command from the
 
 1. Install Python 3.12+.
 2. Install Node.js 20+.
-3. Ensure Elasticsearch is available locally at `http://127.0.0.1:9200` by default.
+3. For persistent local storage, install and start Docker Desktop. Alternatively, configure a reachable remote Elasticsearch instance or use the in-memory backend.
 
 ### Start with One Command
 
@@ -208,6 +208,7 @@ The script automatically:
 
 - Creates a `.venv` virtual environment and installs backend dependencies on first run.
 - Installs frontend dependencies on first run.
+- Starts the local Docker Compose Elasticsearch service and waits for it to become healthy by default.
 - Starts the backend at `http://127.0.0.1:8085`.
 - Starts the frontend at `http://127.0.0.1:5176`.
 
@@ -218,7 +219,7 @@ To stop both processes, press `Ctrl + C` in the current terminal.
 Override the default ports and Elasticsearch address when starting the application:
 
 ```bash
-BACKEND_PORT=8086 FRONTEND_PORT=5177 ES_HOST=http://127.0.0.1:9200 npm run dev:all
+BACKEND_PORT=8086 ES_HOST=http://127.0.0.1:9200 npm run dev:all
 ```
 
 For temporary development or testing without persistent Elasticsearch storage, use the in-memory backend:
@@ -311,6 +312,20 @@ curl -X POST http://127.0.0.1:8085/api/settings/data-sources/history/refresh \
 ```
 
 If Longbridge is unavailable, historical market data falls back to Finnhub, Yahoo Finance, and Nasdaq in that order.
+
+Futu OpenD support uses an optional Python dependency. Install it into the local development environment with:
+
+```bash
+./.venv/bin/python -m pip install -e "./backend[futu]"
+```
+
+For Docker, include the same optional dependency while building:
+
+```bash
+BACKEND_EXTRAS='[futu]' docker compose up --build
+```
+
+The API port is `8085` in local development and `8000` when using Docker Compose.
 
 If Futu OpenD is already running locally, switch the market data provider to **Local OpenD** and enter its host and port. The default host is `127.0.0.1`, and the default port is `11111`.
 
@@ -638,7 +653,7 @@ docker compose down -v
 
 1. 安装 Python 3.12+。
 2. 安装 Node.js 20+。
-3. 确保本机可用 Elasticsearch，默认读取 `http://127.0.0.1:9200`。
+3. 如需本机持久化存储，请安装并启动 Docker Desktop；也可以改用可访问的远端 Elasticsearch，或使用内存存储。
 
 ### 一条命令启动
 
@@ -652,6 +667,7 @@ npm run dev:all
 
 - 首次创建 `.venv` 虚拟环境并安装后端依赖。
 - 首次安装前端依赖。
+- 默认启动本机 Docker Compose Elasticsearch 服务，并等待其健康检查通过。
 - 启动后端 `http://127.0.0.1:8085`。
 - 启动前端 `http://127.0.0.1:5176`。
 
@@ -662,7 +678,7 @@ npm run dev:all
 可以在启动前临时覆盖默认端口和 ES 地址：
 
 ```bash
-BACKEND_PORT=8086 FRONTEND_PORT=5177 ES_HOST=http://127.0.0.1:9200 npm run dev:all
+BACKEND_PORT=8086 ES_HOST=http://127.0.0.1:9200 npm run dev:all
 ```
 
 如果只是临时开发或跑测试，不想连接持久化 Elasticsearch，可以使用内存存储：
@@ -755,6 +771,20 @@ curl -X POST http://127.0.0.1:8085/api/settings/data-sources/history/refresh \
 ```
 
 长桥不可用时，历史行情仍会按 Finnhub、Yahoo Finance、Nasdaq 的顺序兜底。
+
+Futu OpenD 使用可选 Python 依赖。本机开发环境可执行：
+
+```bash
+./.venv/bin/python -m pip install -e "./backend[futu]"
+```
+
+Docker 构建时可执行：
+
+```bash
+BACKEND_EXTRAS='[futu]' docker compose up --build
+```
+
+本机开发的 API 端口是 `8085`，使用 Docker Compose 时则是 `8000`。
 
 如果本机已经运行 Futu OpenD，也可以把行情 Provider 切换为“本地 OpenD”，并填写 host 和 port。默认 host 是 `127.0.0.1`，默认 port 是 `11111`。
 

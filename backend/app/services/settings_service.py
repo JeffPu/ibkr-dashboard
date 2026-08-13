@@ -33,9 +33,6 @@ class AppSettings:
     telegram_allowlisted_chat_ids: list[str] = field(default_factory=list)
     telegram_reports_enabled: bool = False
     telegram_daily_report_time: str = "08:30"
-    mcp_server_enabled: bool = False
-    report_cache_enabled: bool = True
-    report_cache_ttl_minutes: int = 60
     last_successful_sync_at: str | None = None
     last_successful_sync_date: str | None = None
 
@@ -86,9 +83,6 @@ class SettingsService:
         telegram_allowlisted_chat_ids: list[str] | None = None,
         telegram_reports_enabled: bool | None = None,
         telegram_daily_report_time: str | None = None,
-        mcp_server_enabled: bool | None = None,
-        report_cache_enabled: bool | None = None,
-        report_cache_ttl_minutes: int | None = None,
         last_successful_sync_at: str | None = None,
         last_successful_sync_date: str | None = None,
     ) -> AppSettings:
@@ -136,12 +130,6 @@ class SettingsService:
             self._settings.telegram_reports_enabled = telegram_reports_enabled
         if telegram_daily_report_time is not None:
             self._settings.telegram_daily_report_time = telegram_daily_report_time
-        if mcp_server_enabled is not None:
-            self._settings.mcp_server_enabled = mcp_server_enabled
-        if report_cache_enabled is not None:
-            self._settings.report_cache_enabled = report_cache_enabled
-        if report_cache_ttl_minutes is not None:
-            self._settings.report_cache_ttl_minutes = report_cache_ttl_minutes
         if last_successful_sync_at is not None:
             self._settings.last_successful_sync_at = last_successful_sync_at
         if last_successful_sync_date is not None:
@@ -182,9 +170,6 @@ class SettingsService:
             "telegram_allowlisted_chat_ids": list(self._settings.telegram_allowlisted_chat_ids),
             "telegram_reports_enabled": self._settings.telegram_reports_enabled,
             "telegram_daily_report_time": self._settings.telegram_daily_report_time,
-            "mcp_server_enabled": self._settings.mcp_server_enabled,
-            "report_cache_enabled": self._settings.report_cache_enabled,
-            "report_cache_ttl_minutes": self._settings.report_cache_ttl_minutes,
             "last_successful_sync_at": self._settings.last_successful_sync_at,
             "last_successful_sync_date": self._settings.last_successful_sync_date,
         }

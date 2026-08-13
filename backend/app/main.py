@@ -56,7 +56,6 @@ from app.api.routes.settings import set_raw_repository as set_settings_raw_repos
 from app.api.routes.settings import set_settings_service
 from app.api.routes.settings import set_telegram_report_update_handler
 from app.api.routes.telegram import router as telegram_router
-from app.api.routes.telegram import set_quote_service as set_telegram_quote_service
 from app.api.routes.telegram import set_raw_repository as set_telegram_raw_repository
 from app.api.routes.telegram import set_settings_service as set_telegram_settings_service
 from app.api.routes.trades import router as trades_router
@@ -228,7 +227,6 @@ set_settings_quote_service(_quote_service_instance)
 set_positions_quote_service(_quote_service_instance)
 set_overview_quote_service(_quote_service_instance)
 set_portfolio_analysis_quote_service(_quote_service_instance)
-set_telegram_quote_service(_quote_service_instance)
 set_overview_benchmark_history_fetcher(
     lambda symbol, start_date, end_date: fetch_benchmark_history(
         symbol,
@@ -320,7 +318,6 @@ def _build_telegram_command_service() -> TelegramCommandService:
         settings_service=settings_service,
         analysis_service=analysis_service,
         raw_repository=raw_repository,
-        market_data_provider=market_data_provider,
     )
 
 
@@ -676,89 +673,18 @@ def create_manual_backfill_task(payload: ManualBackfillRequest) -> dict[str, str
 def list_manual_backfill_tasks(
     page: int = 1,
     page_size: int = 20,
-    limit: int | None = None,
-    cursor: str | None = None,
-    status: str | None = None,
-    sort_by: str = "created_at",
-    sort_order: str = "desc",
-    start_date: date | None = None,
-    end_date: date | None = None,
 ) -> dict[str, object]:
-    allowed_status = {"pending", "running", "completed", "failed"}
-    if status is not None and status not in allowed_status:
-        raise HTTPException(status_code=400, detail="invalid_status")
-    allowed_sort_by = {"created_at", "start_date", "end_date", "status", "progress"}
-    if sort_by not in allowed_sort_by:
-        raise HTTPException(status_code=400, detail="invalid_sort_by")
-    if sort_order not in {"asc", "desc"}:
-        raise HTTPException(status_code=400, detail="invalid_sort_order")
-    if start_date is not None and end_date is not None:
-        try:
-            validate_backfill_range(start_date, end_date)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
     normalized_page = max(page, 1)
     normalized_page_size = max(min(page_size, 100), 1)
-    normalized_limit = None if limit is None else max(min(limit, 100), 1)
-    start_date_str = start_date.isoformat() if start_date else None
-    end_date_str = end_date.isoformat() if end_date else None
-    next_cursor: str | None = None
-    if normalized_limit is not None or cursor is not None:
-        try:
-            tasks, next_cursor = manual_backfill_service.list_tasks_with_cursor(
-                cursor=cursor,
-                limit=normalized_limit or 20,
-                status=status,
-                start_date=start_date_str,
-                end_date=end_date_str,
-                sort_by=sort_by,
-                sort_order=sort_order,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    else:
-        tasks = manual_backfill_service.list_tasks(
-            page=normalized_page,
-            page_size=normalized_page_size,
-            status=status,
-            start_date=start_date_str,
-            end_date=end_date_str,
-            sort_by=sort_by,
-            sort_order=sort_order,
-        )
-
-    def matches(task) -> bool:
-        if status and task.status != status:
-            return False
-        if start_date_str and task.end_date < start_date_str:
-            return False
-        if end_date_str and task.start_date > end_date_str:
-            return False
-        return True
-
-    total = sum(1 for task in manual_backfill_service.tasks.values() if matches(task))
+    tasks = manual_backfill_service.list_tasks(
+        page=normalized_page,
+        page_size=normalized_page_size,
+    )
     return {
-        "filters": {
-            "status": status,
-            "start_date": start_date_str,
-            "end_date": end_date_str,
-            "sort_by": sort_by,
-            "sort_order": sort_order,
-            "page": normalized_page,
-            "page_size": normalized_page_size,
-            "limit": normalized_limit,
-            "cursor": cursor,
-        },
         "items": [asdict(task) for task in tasks],
         "page": normalized_page,
         "page_size": normalized_page_size,
-        "limit": normalized_limit,
-        "cursor": cursor,
-        "next_cursor": next_cursor,
-        "sort_by": sort_by,
-        "sort_order": sort_order,
-        "total": total,
-        "status_counts": manual_backfill_service.count_by_status(),
+        "total": len(manual_backfill_service.tasks),
     }
 
 

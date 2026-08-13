@@ -39,9 +39,6 @@ def test_get_settings_returns_defaults() -> None:
     assert body["telegram_allowlisted_chat_ids"] == []
     assert body["telegram_reports_enabled"] is False
     assert body["telegram_daily_report_time"] == "08:30"
-    assert body["mcp_server_enabled"] is False
-    assert body["report_cache_enabled"] is True
-    assert body["report_cache_ttl_minutes"] == 60
     assert body["last_successful_sync_at"] is None
     assert body["last_successful_sync_date"] is None
 
@@ -70,9 +67,6 @@ def test_update_settings_persists_values() -> None:
         "telegram_allowlisted_chat_ids": ["123456789", "123456789", "-100987654321"],
         "telegram_reports_enabled": True,
         "telegram_daily_report_time": "09:15",
-        "mcp_server_enabled": True,
-        "report_cache_enabled": True,
-        "report_cache_ttl_minutes": 45,
     }
 
     put_response = client.put("/api/settings", json=update)
@@ -103,11 +97,14 @@ def test_update_settings_persists_values() -> None:
     assert body["telegram_allowlisted_chat_ids"] == ["123456789", "-100987654321"]
     assert body["telegram_reports_enabled"] is True
     assert body["telegram_daily_report_time"] == "09:15"
-    assert body["mcp_server_enabled"] is True
-    assert body["report_cache_enabled"] is True
-    assert body["report_cache_ttl_minutes"] == 45
     assert body["last_successful_sync_at"] is None
     assert body["last_successful_sync_date"] is None
+
+
+def test_update_settings_rejects_retired_fields() -> None:
+    response = TestClient(app).put("/api/settings", json={"report_cache_enabled": False})
+
+    assert response.status_code == 422
 
 
 def test_reveal_finnhub_key_requires_confirmation() -> None:

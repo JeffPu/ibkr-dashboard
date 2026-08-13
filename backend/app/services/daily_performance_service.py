@@ -2,7 +2,7 @@ from typing import Any
 
 from app.repositories.derived_repository import DerivedRepository
 from app.repositories.raw_repository import RawRepository
-from app.services.analytics_service import simple_return, time_weighted_return
+from app.services.analytics_service import simple_return
 
 
 class DailyPerformanceService:
@@ -46,36 +46,6 @@ class DailyPerformanceService:
         }
         self._derived.upsert_portfolio_return(doc_id=doc_id, doc=result)
         return result
-
-    def compute_twr(
-        self,
-        *,
-        account_id: str,
-        start_date: str,
-        end_date: str,
-    ) -> dict[str, Any] | None:
-        returns = self._derived.list_portfolio_returns(size=1000)
-        daily_returns = [
-            r
-            for r in returns
-            if r.get("account_id") == account_id
-            and r.get("range") == "daily"
-            and r.get("date", "") >= start_date
-            and r.get("date", "") <= end_date
-            and r.get("simple_return") is not None
-        ]
-        if not daily_returns:
-            return None
-        daily_returns.sort(key=lambda r: r["date"])
-        subperiod_returns = [r["simple_return"] for r in daily_returns]
-        twr = time_weighted_return(subperiod_returns)
-        return {
-            "account_id": account_id,
-            "start_date": start_date,
-            "end_date": end_date,
-            "twr": twr,
-            "periods": len(subperiod_returns),
-        }
 
     def _get_snapshot(self, account_id: str, report_date: str) -> dict | None:
         doc_id = f"{account_id}_{report_date}"

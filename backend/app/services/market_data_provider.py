@@ -37,7 +37,6 @@ class MarketDataProvider(Protocol):
 
     def get_quote(self, symbol: str) -> dict: ...
     def get_kline_history(self, symbol: str, *, days: int = 90) -> list[MarketDataPoint]: ...
-    def get_option_indicators(self, symbol: str) -> dict: ...
     def get_sentiment(self, symbol: str) -> dict: ...
 
 
@@ -70,9 +69,6 @@ class QuoteFallbackMarketDataProvider:
             for row in rows[-days:]
             if row.get("date") and _float_or_none(row.get("value")) is not None
         ]
-
-    def get_option_indicators(self, symbol: str) -> dict:
-        return {"status": "missing_data", "symbol": symbol.upper(), "source": self.name}
 
     def get_sentiment(self, symbol: str) -> dict:
         return {"status": "missing_data", "symbol": symbol.upper(), "source": self.name}
@@ -161,14 +157,6 @@ class FutuOpenDReadOnlyProvider:
             )
         return points
 
-    def get_option_indicators(self, symbol: str) -> dict:
-        return {
-            "status": "missing_data",
-            "symbol": symbol.upper(),
-            "source": self.name,
-            "reason": "futu_option_chain_unavailable",
-        }
-
     def get_sentiment(self, symbol: str) -> dict:
         return {
             "status": "missing_data",
@@ -216,14 +204,6 @@ class LongbridgeReadOnlyProvider:
             for row in rows[-days:]
             if row.get("date") and _float_or_none(row.get("close")) is not None
         ]
-
-    def get_option_indicators(self, symbol: str) -> dict:
-        return {
-            "status": "missing_data",
-            "symbol": symbol.upper(),
-            "source": self.name,
-            "reason": "longbridge_option_chain_unavailable",
-        }
 
     def get_sentiment(self, symbol: str) -> dict:
         normalized = str(symbol or "").strip().upper()

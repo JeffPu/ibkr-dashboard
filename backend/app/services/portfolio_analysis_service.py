@@ -1,11 +1,8 @@
 from __future__ import annotations
-
 import json
 from datetime import date
 from datetime import datetime
 from datetime import timezone
-from datetime import timedelta
-from functools import lru_cache
 from statistics import mean
 from threading import Thread
 from typing import Any, Callable
@@ -25,8 +22,6 @@ from app.api.portfolio_analysis_contracts import StockResearchMemo
 from app.api.portfolio_analysis_contracts import StockSelectionOption
 from app.api.portfolio_analysis_contracts import StandardMetric
 from app.api.portfolio_analysis_contracts import build_empty_portfolio_analysis_response
-from app.api.portfolio_analysis_contracts import empty_chart
-from app.api.portfolio_analysis_contracts import missing_metric
 from app.repositories.raw_repository import RawRepository
 from app.services.ai_narrative_service import AINarrativeService
 from app.services.ai_narrative_service import MockAIProvider
@@ -37,7 +32,6 @@ from app.services.market_data_provider import MarketDataProvider
 from app.services.market_data_provider import build_futu_opend_provider
 from app.services.market_data_provider import calculate_rsi
 from app.services.market_data_provider import fetch_cnn_fear_greed
-from app.services.quote_service import fetch_longbridge_valuation_rank
 from app.services.settings_service import SettingsService
 from app.utils.numbers import optional_float as _optional_float
 from app.utils.numbers import to_float as _to_float
@@ -123,21 +117,6 @@ class PortfolioAnalysisService:
             ]
         )
         return response
-
-    def mark_narrative_refresh_started(
-        self,
-        *,
-        section: PortfolioAnalysisSectionKey,
-        symbol: str | None = None,
-    ) -> str | None:
-        resolved_symbol = self._resolve_stock_symbol(symbol) if section == PortfolioAnalysisSectionKey.STOCK else symbol
-        provider = self._ai_provider()
-        self._ai_narrative_service.mark_refresh_started(
-            provider=provider,
-            section=section.value,
-            cache_key=_narrative_cache_key(section, resolved_symbol),
-        )
-        return resolved_symbol
 
     def _build_market_section(self, positions: list[dict]):
         response = build_empty_portfolio_analysis_response(
@@ -796,58 +775,6 @@ class PortfolioAnalysisService:
             industry = self._industry_mapping_service.get(symbol) or ""
         return industry or "未知行业"
 
-    def _greek_metrics(self, positions: list[dict]) -> dict[str, StandardMetric]:
-        result: dict[str, StandardMetric] = {}
-        for greek in ("delta", "gamma", "theta", "vega"):
-            values = [_to_float(position.get(greek)) for position in positions if str(position.get(greek, "") or "") != ""]
-            if values:
-                result[greek] = _metric(
-                    value=round(sum(values), 4),
-                    source="portfolio_positions",
-                    status=AnalysisStatus.READY,
-                    confidence=0.75,
-                    reason="aggregated_from_position_greeks",
-                )
-            else:
-                result[greek] = missing_metric(source="portfolio_positions", reason="missing_greeks")
-        return result
-
-    def _expiration_metrics(self, positions: list[dict]) -> dict[str, StandardMetric]:
-        expiries = [_parse_yyyymmdd(str(position.get("expiry", "") or "")) for position in positions]
-        expiries = [expiry for expiry in expiries if expiry is not None]
-        today = date.today()
-        count_7 = sum(1 for expiry in expiries if 0 <= (expiry - today).days <= 7)
-        count_30 = sum(1 for expiry in expiries if 0 <= (expiry - today).days <= 30)
-        status = AnalysisStatus.READY if expiries else AnalysisStatus.MISSING_DATA
-        reason = "computed_from_option_expiry" if expiries else "option_expiry_data_not_available"
-        return {
-            "next_7_days": _metric(value=count_7 if expiries else None, unit="contracts", source="portfolio_positions", status=status, confidence=0.8 if expiries else 0.0, reason=reason),
-            "next_30_days": _metric(value=count_30 if expiries else None, unit="contracts", source="portfolio_positions", status=status, confidence=0.8 if expiries else 0.0, reason=reason),
-        }
-
-    def _narrative(
-        self,
-        section: str,
-        metrics: dict[str, Any],
-        cache_key: str = "default",
-        *,
-        refresh_ai: bool = False,
-    ) -> AINarrativePayload:
-        provider = self._ai_provider()
-        if not refresh_ai and provider.name != "mock":
-            return self._ai_narrative_service.cached_or_pending(
-                provider=provider,
-                section=section,
-                cache_key=cache_key,
-            )
-        return self._ai_narrative_service.generate(
-            provider=provider,
-            section=section,
-            metrics=metrics,
-            cache_key=cache_key,
-            force=refresh_ai,
-        )
-
     def _ai_provider(self):
         settings = self._settings_service.get()
         return build_ai_provider(
@@ -865,16 +792,6 @@ class PortfolioAnalysisService:
     def _emit_progress(self, stage: str, details: dict[str, Any] | None = None) -> None:
         if self._progress_callback is not None:
             self._progress_callback(stage, details or {})
-
-    def _resolve_stock_symbol(self, symbol: str | None) -> str | None:
-        normalized_symbol = symbol.upper() if symbol else None
-        if normalized_symbol:
-            return normalized_symbol
-        positions = self._current_positions()
-        if not positions:
-            return None
-        return str(positions[0].get("symbol", "") or "").upper() or None
-
 
 def _metric(
     *,
@@ -1174,20 +1091,6 @@ def _largest_position_symbol(positions: list[dict]) -> str | None:
 def _top_symbols(positions: list[dict], *, limit: int) -> list[str]:
     rows = sorted(positions, key=lambda row: abs(_position_value(row)), reverse=True)
     return [str(row.get("symbol", "") or "").upper() for row in rows[:limit] if row.get("symbol")]
-
-
-def _top_position_rows(positions: list[dict], total: float, *, limit: int) -> list[dict[str, Any]]:
-    rows = sorted(positions, key=lambda row: abs(_position_value(row)), reverse=True)
-    return [
-        {
-            "symbol": str(row.get("symbol", "") or "").upper(),
-            "industry": str(row.get("industry") or "未知行业"),
-            "weight": round((abs(_position_value(row)) / total) * 100, 2) if total else 0.0,
-            "daily_change_pct": round(_to_float(row.get("daily_change_pct")) * 100, 2),
-            "market_value": round(abs(_position_value(row)), 2),
-        }
-        for row in rows[:limit]
-    ]
 
 
 def _portfolio_risk_rows(
@@ -1959,16 +1862,6 @@ def _factor_rows(positions: list[dict], total: float) -> list[dict[str, Any]]:
         ("cyclical", cyclical_weight, 0.55, "cyclical_industry_proxy"),
     ]
     return [{"key": key, "weight": weight, "confidence": confidence, "reason": reason} for key, weight, confidence, reason in rows]
-
-
-def _factor_label(key: str) -> str:
-    labels = {
-        "growth": "成长",
-        "ai_beta": "智能主题弹性",
-        "semiconductor": "半导体",
-        "cyclical": "周期/高波动",
-    }
-    return labels.get(key, key)
 
 
 def _macro_sensitivity_metrics(positions: list[dict], ai_weight: float) -> dict[str, StandardMetric]:
@@ -2848,171 +2741,8 @@ def _weight_change_scatter_chart(positions: list[dict], total: float) -> ECharts
     )
 
 
-def _price_correlation_heat_chart(symbols: list[str], histories: dict[str, list[MarketDataPoint]]) -> EChartsPayload:
-    ready_symbols = [symbol for symbol in symbols[:5] if len(_daily_returns(histories.get(symbol, []))) >= 20]
-    points: list[dict[str, float | int | str | None]] = []
-    for x_index, left in enumerate(ready_symbols):
-        for y_index, right in enumerate(ready_symbols):
-            if left == right:
-                value = 1.0
-            else:
-                value = _return_correlation(histories.get(left, []), histories.get(right, []))
-            points.append({"x": x_index, "y": y_index, "name": f"{left}/{right}", "value": None if value is None else round(value * 100, 2)})
-    return EChartsPayload(
-        chart_type="heatmap",
-        title="真实价格相关性热力图",
-        unit="percent",
-        status=AnalysisStatus.READY if len(ready_symbols) >= 2 else AnalysisStatus.MISSING_DATA,
-        source="market_data_provider_daily_returns",
-        series=[EChartsSeries(name="价格相关性", points=points)] if len(ready_symbols) >= 2 else [],
-        options={
-            "x_labels": ready_symbols,
-            "y_labels": ready_symbols,
-            "min": -100,
-            "max": 100,
-            "description": "基于前五大持仓最近约90个交易日的日收益率计算 Pearson 相关性。",
-        },
-    )
-
-
-def _qqq_beta_chart(
-    positions: list[dict],
-    total: float,
-    symbols: list[str],
-    histories: dict[str, list[MarketDataPoint]],
-    benchmark_history: list[MarketDataPoint],
-) -> EChartsPayload:
-    points: list[dict[str, float | int | str | None]] = []
-    portfolio_beta = 0.0
-    portfolio_weight = 0.0
-    for symbol in symbols[:8]:
-        position = next((row for row in positions if str(row.get("symbol", "") or "").upper() == symbol), {})
-        beta = _return_beta(histories.get(symbol, []), benchmark_history)
-        if beta is None:
-            continue
-        weight = _position_weight(position, total)
-        portfolio_beta += beta * weight
-        portfolio_weight += weight
-        points.append({"name": symbol, "value": round(beta, 2), "weight": round(weight * 100, 2)})
-    if points and portfolio_weight > 0:
-        points.insert(0, {"name": "组合估算", "value": round(portfolio_beta, 2), "weight": round(portfolio_weight * 100, 2)})
-    return EChartsPayload(
-        chart_type="bar",
-        title="近90日组合 Beta / QQQ 敏感度",
-        unit="beta",
-        status=AnalysisStatus.READY if points else AnalysisStatus.MISSING_DATA,
-        source="market_data_provider_90d_daily_returns",
-        series=[EChartsSeries(name="Beta", points=points)] if points else [],
-        options={"description": "Beta 使用近90日持仓日收益率相对 QQQ 日收益率的协方差/方差估算，>1 表示这段时间内比 QQQ 更高弹性。"},
-    )
-
-
-def _valuation_crowding_matrix(positions: list[dict], total: float, *, provider_name: str) -> EChartsPayload:
-    points: list[dict[str, float | int | str | None]] = []
-    if provider_name == "longbridge":
-        for position in sorted(positions, key=lambda row: abs(_position_value(row)), reverse=True)[:8]:
-            symbol = str(position.get("symbol", "") or "").upper()
-            latest = _latest_valuation_rank(symbol)
-            percentile = _valuation_percentile(latest)
-            if percentile is None:
-                continue
-            points.append(
-                {
-                    "name": symbol,
-                    "x": round(_position_weight(position, total) * 100, 2),
-                    "y": percentile,
-                    "value": round(abs(_position_value(position)), 2),
-                }
-            )
-    return EChartsPayload(
-        chart_type="scatter",
-        title="估值拥挤矩阵",
-        unit="percent",
-        status=AnalysisStatus.READY if points else AnalysisStatus.MISSING_DATA,
-        source="longbridge_valuation_rank",
-        series=[EChartsSeries(name="估值位置", points=points)] if points else [],
-        options={
-            "x_label": "组合权重 %",
-            "y_label": "行业估值位置 %",
-            "description": "横轴是组合权重，纵轴优先使用长桥 PE 行业位置；PE 缺失时回退到 PB/PS。右上角表示重仓且估值相对拥挤。",
-        },
-    )
-
-
 def _position_weight(position: dict, total: float) -> float:
     return 0.0 if total == 0 else abs(_position_value(position)) / total
-
-
-def _daily_returns(history: list[MarketDataPoint]) -> dict[str, float]:
-    closes = [(point.date, float(point.close)) for point in history if point.date and point.close is not None and float(point.close) > 0]
-    returns: dict[str, float] = {}
-    for index in range(1, len(closes)):
-        previous = closes[index - 1][1]
-        current = closes[index][1]
-        if previous > 0:
-            returns[closes[index][0]] = current / previous - 1
-    return returns
-
-
-def _return_correlation(left: list[MarketDataPoint], right: list[MarketDataPoint]) -> float | None:
-    left_returns = _daily_returns(left)
-    right_returns = _daily_returns(right)
-    common = sorted(set(left_returns) & set(right_returns))
-    if len(common) < 20:
-        return None
-    xs = [left_returns[day] for day in common]
-    ys = [right_returns[day] for day in common]
-    return _correlation(xs, ys)
-
-
-def _return_beta(stock: list[MarketDataPoint], benchmark: list[MarketDataPoint]) -> float | None:
-    stock_returns = _daily_returns(stock)
-    benchmark_returns = _daily_returns(benchmark)
-    common = sorted(set(stock_returns) & set(benchmark_returns))
-    if len(common) < 20:
-        return None
-    xs = [stock_returns[day] for day in common]
-    ys = [benchmark_returns[day] for day in common]
-    variance = _variance(ys)
-    if variance <= 0:
-        return None
-    return _covariance(xs, ys) / variance
-
-
-def _correlation(xs: list[float], ys: list[float]) -> float | None:
-    denominator = (_variance(xs) * _variance(ys)) ** 0.5
-    if denominator <= 0:
-        return None
-    return max(-1.0, min(1.0, _covariance(xs, ys) / denominator))
-
-
-def _covariance(xs: list[float], ys: list[float]) -> float:
-    x_mean = mean(xs)
-    y_mean = mean(ys)
-    return mean([(x - x_mean) * (y - y_mean) for x, y in zip(xs, ys)])
-
-
-def _variance(values: list[float]) -> float:
-    value_mean = mean(values)
-    return mean([(value - value_mean) ** 2 for value in values])
-
-
-@lru_cache(maxsize=256)
-def _latest_valuation_rank(symbol: str) -> dict[str, Any]:
-    end = date.today()
-    start = end - timedelta(days=45)
-    ranks = fetch_longbridge_valuation_rank(symbol, start_date=start.isoformat(), end_date=end.isoformat())
-    if not ranks:
-        return {}
-    return ranks[sorted(ranks)[-1]]
-
-
-def _valuation_percentile(rank: dict[str, Any]) -> float | None:
-    for key in ("pe_percentile", "pe_ttm_percentile", "pb_percentile", "ps_percentile"):
-        value = _to_float(rank.get(key))
-        if value > 0:
-            return round(value, 2)
-    return None
 
 
 def _hedge_suggestions(response: PortfolioRiskSection, sector_rows: list[dict]) -> list[str]:
@@ -3114,195 +2844,6 @@ def _metric_number(metric: StandardMetric | None) -> float:
     return _to_float(metric.value)
 
 
-def _trend_score(history: list[MarketDataPoint], rsi: float | None) -> float | None:
-    closes = [float(point.close) for point in history if point.close is not None]
-    if len(closes) < 20:
-        if rsi is None:
-            return None
-        return round(max(0.0, min(100.0, rsi)), 2)
-    latest = closes[-1]
-    ma20 = mean(closes[-20:])
-    ma60 = mean(closes[-60:]) if len(closes) >= 60 else ma20
-    ret20 = (latest / closes[-20] - 1) if closes[-20] else 0.0
-    score = 50
-    score += 18 if latest >= ma20 else -12
-    score += 12 if latest >= ma60 else -8
-    score += max(-15, min(15, ret20 * 100))
-    if rsi is not None:
-        score += (rsi - 50) * 0.25
-    return round(max(0.0, min(100.0, score)), 2)
-
-
-def _stock_sentiment_score(position: dict | None) -> float | None:
-    if not position:
-        return None
-    daily_change = _to_float(position.get("daily_change_pct")) * 100
-    unrealized = _to_float(position.get("unrealized_pnl_snapshot"))
-    cost_basis = abs(_to_float(position.get("cost_basis_money")))
-    pnl_ratio = 0.0 if cost_basis == 0 else max(-50.0, min(50.0, unrealized / cost_basis * 100))
-    score = 50 + daily_change * 3 + pnl_ratio * 0.25
-    return round(max(0.0, min(100.0, score)), 2)
-
-
-def _stock_direction(daily_change_pct: float, rsi: float | None, trend_score: float | None) -> str:
-    score = 0
-    score += 1 if daily_change_pct > 0.01 else -1 if daily_change_pct < -0.01 else 0
-    if rsi is not None:
-        score += 1 if rsi >= 55 else -1 if rsi <= 45 else 0
-    if trend_score is not None:
-        score += 1 if trend_score >= 60 else -1 if trend_score <= 40 else 0
-    if score >= 2:
-        return "偏多"
-    if score <= -2:
-        return "偏空"
-    return "中性"
-
-
-def _stock_core_changes(symbol: str, position: dict | None, weight: float, rsi: float | None, trend_score: float | None) -> list[str]:
-    if not position:
-        return [f"{symbol} 不在当前持仓中，无法计算对组合的真实影响。"]
-    daily_pct = round(_to_float(position.get("daily_change_pct")) * 100, 2)
-    items = [f"{symbol} 当前组合权重约 {round(weight * 100, 2)}%，最新持仓日变化为 {daily_pct}%。"]
-    if rsi is not None:
-        items.append(f"{symbol} 相对强弱指数为 {rsi}，用于判断短期强弱，不代表基本面结论。")
-    if trend_score is not None:
-        items.append(f"趋势分为 {trend_score}，由价格均线、近 20 日收益和相对强弱指数共同计算。")
-    return items
-
-
-def _stock_portfolio_impact(symbol: str, position: dict | None, weight: float) -> list[str]:
-    if not position:
-        return [f"{symbol} 当前没有持仓权重，对组合没有直接仓位影响。"]
-    daily_value_change = _to_float(position.get("daily_change")) * abs(_to_float(position.get("quantity")) or 1.0)
-    return [
-        f"{symbol} 对组合的主要影响来自 {round(weight * 100, 2)}% 的仓位权重。",
-        f"按当前快照估算，单日市值影响约 {round(daily_value_change, 2)}。",
-    ]
-
-
-def _beneficiary_chain(industry: str, symbol: str) -> list[str]:
-    text = industry.upper()
-    if "半导体" in industry or "SEMICONDUCTOR" in text:
-        return ["真正受益环节通常在算力需求、存储、处理器、图形处理器周期、晶圆与设备资本开支之间传导。"]
-    if "AI" in text:
-        return ["真正受益环节取决于智能应用收入能否覆盖持续资本开支。"]
-    if "航天" in industry or symbol == "RKLB":
-        return ["真正受益环节在发射订单、卫星制造、国防/商业航天预算兑现。"]
-    if symbol == "TSLA":
-        return ["真正受益或受损环节在交付、毛利率、自动驾驶叙事和能源业务兑现。"]
-    return ["需要结合行业公告和财报数据确认利润池传导，本地数据暂不支持原文判断。"]
-
-
-def _market_mispricing(symbol: str, daily_change_pct: float, unrealized: float, weight: float) -> list[str]:
-    items = []
-    if daily_change_pct < -0.03 and unrealized > 0:
-        items.append(f"{symbol} 仍有未实现盈利但短期下跌较大，市场可能正在重新定价前期乐观预期。")
-    elif daily_change_pct > 0.03 and weight >= 0.1:
-        items.append(f"{symbol} 上涨会明显改善组合风险表观，但也可能提高单票依赖。")
-    else:
-        items.append("当前本地数据不足以判断市场误判，需结合新闻、财报和公告原文。")
-    return items
-
-
-def _stock_watch_signals(symbol: str, industry: str, direction: str | None) -> list[str]:
-    signals = ["价格相对 20 日均线是否继续保持", "组合权重是否继续上升", "日内波动是否扩散到同主题持仓"]
-    if "半导体" in industry:
-        signals.append("半导体同业和智能资本开支预期是否同步变化")
-    if symbol == "TSLA":
-        signals.append("交付、毛利率与自动驾驶叙事是否支持当前估值")
-    if direction == "偏空":
-        signals.append("是否出现连续放量下跌或跌破关键均线")
-    return signals[:4]
-
-
-def _stock_risks(symbol: str, weight: float, daily_change_pct: float, sentiment: float | None) -> list[str]:
-    risks = []
-    if weight >= 0.15:
-        risks.append(f"{symbol} 权重较高，单票波动会直接改变组合风险。")
-    if daily_change_pct <= -0.03:
-        risks.append(f"{symbol} 单日跌幅偏大，需要确认是否有基本面事件。")
-    if sentiment is not None and sentiment < 35:
-        risks.append("本地情绪代理偏弱，需避免只看未实现盈利而忽略短期风险。")
-    return risks or ["当前未触发单票高风险规则，但仍需跟踪价格、财报与同主题持仓联动。"]
-
-
-def _evidence_links(symbol: str) -> list[dict[str, str]]:
-    return [
-        {"label": "本地持仓快照", "url": f"/api/positions/{symbol}/detail"},
-        {"label": "本地持仓分析接口", "url": f"/api/portfolio-analysis?section=stock&symbol={symbol}"},
-    ]
-
-
-def _market_narrative_metrics(
-    response: MarketAnalysisSection,
-    positions: list[dict],
-    benchmark: str | None,
-) -> dict[str, Any]:
-    return {
-        "market_regime": response.regime.model_dump(mode="json"),
-        "benchmark": benchmark,
-        "indicators": _metrics_for_narrative(response.indicators),
-        "market_pulse": response.market_pulse,
-        "playbook": response.playbook,
-        "strategy": response.strategy,
-        "portfolio_impact": response.portfolio_impact,
-        "watch_symbols": response.watch_symbols,
-        "opportunities": response.opportunities,
-        "risks": response.risks,
-        "top_positions": _top_position_rows(positions, _positions_total(positions), limit=5),
-    }
-
-
-def _line_chart(title: str, history: list[MarketDataPoint], *, source: str) -> EChartsPayload:
-    points = [
-        {"date": point.date, "value": point.close}
-        for point in history
-        if point.close is not None
-    ]
-    return EChartsPayload(
-        chart_type="line",
-        title=title,
-        status=AnalysisStatus.READY if points else AnalysisStatus.MISSING_DATA,
-        source=source,
-        series=[EChartsSeries(name=title, points=points)] if points else [],
-    )
-
-
-def _multi_line_chart(
-    title: str,
-    series: list[tuple[str, list[MarketDataPoint]]],
-    *,
-    source: str,
-) -> EChartsPayload:
-    shaped_series: list[EChartsSeries] = []
-    for name, history in series:
-        closes = [float(point.close) for point in history if point.close is not None]
-        first = closes[0] if closes else 0.0
-        points = [
-            {
-                "date": point.date,
-                "value": round((float(point.close) / first - 1) * 100, 2) if first and point.close is not None else None,
-            }
-            for point in history
-            if point.close is not None
-        ]
-        if points:
-            shaped_series.append(EChartsSeries(name=name, points=points[-90:]))
-    return EChartsPayload(
-        chart_type="line",
-        title=title,
-        unit="percent",
-        status=AnalysisStatus.READY if shaped_series else AnalysisStatus.MISSING_DATA,
-        source=source,
-        series=shaped_series,
-        options={"normalized": True},
-    )
-
-
-def _metrics_for_narrative(metrics: dict[str, StandardMetric]) -> dict[str, Any]:
-    return {key: value.model_dump(mode="json") for key, value in metrics.items()}
-
-
 def _combine_status(statuses: list[AnalysisStatus]) -> AnalysisStatus:
     if any(status == AnalysisStatus.READY for status in statuses):
         return AnalysisStatus.READY
@@ -3329,19 +2870,3 @@ def _active_narrative(
         if narrative.status in {AnalysisStatus.READY, AnalysisStatus.ERROR, AnalysisStatus.PENDING}:
             return narrative
     return response.integrations.ai
-
-
-def _narrative_cache_key(section: PortfolioAnalysisSectionKey, symbol: str | None) -> str:
-    if section == PortfolioAnalysisSectionKey.STOCK and symbol:
-        return symbol.upper()
-    return "default"
-
-
-def _parse_yyyymmdd(value: str) -> date | None:
-    normalized = value.replace("-", "")[:8]
-    if len(normalized) != 8 or not normalized.isdigit():
-        return None
-    try:
-        return date(int(normalized[:4]), int(normalized[4:6]), int(normalized[6:8]))
-    except ValueError:
-        return None
